@@ -68,21 +68,18 @@ export default function App() {
       </nav>
 
       <main className="app-main">
-        {activeTab === 'module1' && (
+        <div style={{ display: activeTab === 'module1' ? 'block' : 'none' }}>
           <Module1 sharedState={sharedState} sharedSetters={sharedSetters} />
-        )}
-        {activeTab === 'module2' && (
+        </div>
+        <div style={{ display: activeTab === 'module2' ? 'block' : 'none' }}>
           <Module2 sharedState={sharedState} sharedSetters={sharedSetters} />
-        )}
-        {activeTab === 'module3' && (
+        </div>
+        <div style={{ display: activeTab === 'module3' ? 'block' : 'none' }}>
           <Module3 sharedState={sharedState} sharedSetters={sharedSetters} />
-        )}
-        {activeTab === 'scenarios' && (
-          <ScenarioManager
-            sharedState={sharedState}
-            sharedSetters={sharedSetters}
-          />
-        )}
+        </div>
+        <div style={{ display: activeTab === 'scenarios' ? 'block' : 'none' }}>
+          <ScenarioManager sharedState={sharedState} sharedSetters={sharedSetters} />
+        </div>
       </main>
 
       <AssumptionsPanel />

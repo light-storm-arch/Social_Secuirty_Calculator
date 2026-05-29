@@ -167,32 +167,95 @@ export default function Module3({ sharedState }) {
 
   const heatmapData = useMemo(() => {
     if (mode === 'single') {
-      if (calcMode === 'deterministic') {
-        return genSingleDetHeatmap(piaA, fraA, personA, deathAgeRange, rate, startAge)
-      } else {
-        return genSingleProbHeatmap(piaA, fraA, personA, investRateRange)
+      // Build the raw grid (always claimAge on one axis, deathAge/returnRate on the other)
+      const raw = calcMode === 'deterministic'
+        ? genSingleDetHeatmap(piaA, fraA, personA, deathAgeRange, rate, startAge)
+        : genSingleProbHeatmap(piaA, fraA, personA, investRateRange)
+      // Transpose if user swapped the axes
+      const xIsClaimAge = (calcMode === 'deterministic' && heatXAxis === 'claimAge') ||
+                          (calcMode === 'probabilistic' && heatXAxis === 'claimAge')
+      if (xIsClaimAge) return raw
+      return {
+        data: raw.data.map(d => ({ xVal: d.yVal, yVal: d.xVal, value: d.value })),
+        xValues: raw.yValues,
+        yValues: raw.xValues,
       }
     }
-    // Couple: X = claim age A, Y = claim age B
+
+    // Couple mode
     if (!result?.heatmapMatrix) return null
+
+    // Axes involving claim ages — pull from the already-computed heatmapMatrix
+    if ((heatXAxis === 'claimAgeA' || heatXAxis === 'claimAgeB') &&
+        (heatYAxis === 'claimAgeA' || heatYAxis === 'claimAgeB')) {
+      const data = []
+      const xSet = new Set()
+      const ySet = new Set()
+      for (const entry of result.heatmapMatrix) {
+        if (entry.claimAgeA.months !== 0 || entry.claimAgeB.months !== 0) continue
+        const xv = heatXAxis === 'claimAgeA' ? entry.claimAgeA.years : entry.claimAgeB.years
+        const yv = heatYAxis === 'claimAgeA' ? entry.claimAgeA.years : entry.claimAgeB.years
+        xSet.add(xv)
+        ySet.add(yv)
+        data.push({ xVal: xv, yVal: yv, value: entry.value })
+      }
+      return {
+        data,
+        xValues: [...xSet].sort((a, b) => a - b),
+        yValues: [...ySet].sort((a, b) => a - b),
+      }
+    }
+
+    // Couple deterministic: one claim age axis + one death age axis
+    // Pin the other claim age at optimal; sweep the death age
+    if (!result?.optimal) return null
+    const pinnedClaimAgeA = result.optimal.claimAgeA ?? { years: 67, months: 0 }
+    const pinnedClaimAgeB = result.optimal.claimAgeB ?? { years: 67, months: 0 }
+
+    const claimAgeAxis = heatXAxis.startsWith('claimAge') ? heatXAxis : heatYAxis
+    const deathAgeAxis = heatXAxis.startsWith('deathAge') ? heatXAxis : heatYAxis
+
+    const claimAgeRange = Array.from({ length: 9 }, (_, i) => 62 + i) // 62-70
     const data = []
     const xSet = new Set()
     const ySet = new Set()
-    for (const entry of result.heatmapMatrix) {
-      const xv = entry.claimAgeA.years * 12 + entry.claimAgeA.months
-      const yv = entry.claimAgeB.years * 12 + entry.claimAgeB.months
-      // Only show yearly crossings for readability
-      if (entry.claimAgeA.months !== 0 || entry.claimAgeB.months !== 0) continue
-      xSet.add(entry.claimAgeA.years)
-      ySet.add(entry.claimAgeB.years)
-      data.push({ xVal: entry.claimAgeA.years, yVal: entry.claimAgeB.years, value: entry.value })
+
+    for (const da of deathAgeRange) {
+      for (const ca of claimAgeRange) {
+        const claimAgeA = deathAgeAxis === 'deathAgeA' ? pinnedClaimAgeA : { years: ca, months: 0 }
+        const claimAgeB = deathAgeAxis === 'deathAgeB' ? pinnedClaimAgeB : { years: ca, months: 0 }
+        const xv = claimAgeAxis === heatXAxis ? ca : da
+        const yv = claimAgeAxis === heatYAxis ? ca : da
+        xSet.add(xv)
+        ySet.add(yv)
+
+        // Score this combo
+        const monthlyA = piaA * benefitFactor(claimAgeA, fraA)
+        const monthlyB = piaB * benefitFactor(claimAgeB, fraB ?? fraA)
+        const deathA = deathAgeAxis === 'deathAgeA' ? da : deathAgeA
+        const deathB = deathAgeAxis === 'deathAgeB' ? da : deathAgeB
+        let val = 0
+        const end = Math.max(deathA, deathB)
+        for (let age = Math.ceil(startAge); age <= end; age++) {
+          const aAlive = age <= deathA
+          const bAlive = age <= deathB
+          const aStarted = age >= claimAgeA.years
+          const bStarted = age >= claimAgeB.years
+          let income = 0
+          if (aAlive && bAlive) income = (aStarted ? monthlyA : 0) * 12 + (bStarted ? monthlyB : 0) * 12
+          else if (aAlive) income = (aStarted ? Math.max(monthlyA, monthlyB) : 0) * 12
+          else if (bAlive) income = (bStarted ? Math.max(monthlyB, monthlyA) : 0) * 12
+          val = rate > 0 ? val * (1 + rate) + income : val + income
+        }
+        data.push({ xVal: xv, yVal: yv, value: val })
+      }
     }
     return {
       data,
       xValues: [...xSet].sort((a, b) => a - b),
       yValues: [...ySet].sort((a, b) => a - b),
     }
-  }, [mode, calcMode, piaA, fraA, personA, piaB, fraB, personB, rate, result])
+  }, [mode, calcMode, heatXAxis, heatYAxis, piaA, fraA, personA, piaB, fraB, personB, rate, result, deathAgeA, deathAgeB])
 
   const optimal = result?.optimal
 
@@ -338,26 +401,20 @@ export default function Module3({ sharedState }) {
           )
         })()}
 
-        <p style={{ fontSize: '0.82rem', color: '#4b5a7a', marginBottom: 12 }}>
-          {mode === 'single'
-            ? calcMode === 'deterministic'
-              ? 'Claim age (x) vs. assumed death age (y). Color = cumulative lifetime benefit.'
-              : 'Claim age (x) vs. real return rate (y). Color = survival-weighted lifetime value.'
-            : 'Person A claim age (x) vs. Person B claim age (y). Color = household lifetime value.'}
-        </p>
         {heatmapData ? (() => {
+          const axisLabels = {
+            claimAge: 'Claim Age', deathAge: 'Death Age', returnRate: 'Return Rate (%)',
+            claimAgeA: 'Person A Claim Age', claimAgeB: 'Person B Claim Age',
+            deathAgeA: 'Person A Death Age', deathAgeB: 'Person B Death Age',
+          }
           const optimalCell = heatmapData.data && heatmapData.data.length > 0
             ? heatmapData.data.reduce((best, cell) => cell.value > best.value ? cell : best, heatmapData.data[0])
             : null
           return (
             <SensitivityHeatmap
               data={heatmapData.data}
-              xLabel={mode === 'single' ? 'Claim Age' : 'Person A Claim Age'}
-              yLabel={
-                mode === 'single'
-                  ? calcMode === 'deterministic' ? 'Death Age' : 'Return Rate'
-                  : 'Person B Claim Age'
-              }
+              xLabel={axisLabels[heatXAxis] ?? heatXAxis}
+              yLabel={axisLabels[heatYAxis] ?? heatYAxis}
               xValues={heatmapData.xValues}
               yValues={heatmapData.yValues}
               optimalX={optimalCell?.xVal}
