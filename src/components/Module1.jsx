@@ -66,30 +66,43 @@ function BenefitChart({ rows, fra, chartRef }) {
 
 function BenefitTableComp({ rows, fra }) {
   const fraMonths = fraToMonths(fra)
+  const [period, setPeriod] = React.useState('monthly')
   return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Claim Age</th>
-            <th>Monthly Benefit</th>
-            <th>% of PIA</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => {
-            const am = r.claimAge.years * 12 + r.claimAge.months
-            const isFra = am === fraMonths
-            return (
-              <tr key={i} className={isFra ? 'fra-row' : ''}>
-                <td>{ageLabel(r.claimAge)}{isFra ? ' (FRA)' : ''}</td>
-                <td>${Math.round(r.monthlyBenefit).toLocaleString()}</td>
-                <td>{r.pctOfPia.toFixed(1)}%</td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <span style={{ fontSize: '0.82rem', color: '#4b5a7a', fontWeight: 600 }}>Show:</span>
+        <div className="seg-control" style={{ fontSize: '0.82rem' }}>
+          <button className={`seg-btn ${period === 'monthly' ? 'active' : ''}`} onClick={() => setPeriod('monthly')}>Monthly</button>
+          <button className={`seg-btn ${period === 'annual' ? 'active' : ''}`} onClick={() => setPeriod('annual')}>Annual</button>
+        </div>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Claim Age</th>
+              <th>{period === 'monthly' ? 'Monthly Benefit' : 'Annual Benefit'}</th>
+              <th>% of PIA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const am = r.claimAge.years * 12 + r.claimAge.months
+              const isFra = am === fraMonths
+              const amount = period === 'monthly'
+                ? Math.round(r.monthlyBenefit)
+                : Math.round(r.monthlyBenefit * 12)
+              return (
+                <tr key={i} className={isFra ? 'fra-row' : ''}>
+                  <td>{ageLabel(r.claimAge)}{isFra ? ' (FRA)' : ''}</td>
+                  <td>${amount.toLocaleString()}</td>
+                  <td>{r.pctOfPia.toFixed(1)}%</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
