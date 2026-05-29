@@ -96,6 +96,14 @@ export default function Module3({ sharedState }) {
   const [invest, setInvest] = useState(false)
   const [investRate, setInvestRate] = useState(0.02)
 
+  // Heatmap axis range controls
+  const [deathAgeMin, setDeathAgeMin] = useState(70)
+  const [deathAgeMax, setDeathAgeMax] = useState(100)
+  const [rateMin, setRateMin] = useState(0)
+  const [rateMax, setRateMax] = useState(8)   // stored as whole-number percent, converted on use
+  const [claimAgeMin, setClaimAgeMin] = useState(62)
+  const [claimAgeMax, setClaimAgeMax] = useState(70)
+
   const getDefaultAxes = (cm, m) => {
     if (m === 'single') {
       return cm === 'deterministic'
@@ -158,8 +166,30 @@ export default function Module3({ sharedState }) {
 
   // Heatmap data
   const startAge = Math.max(62, Math.ceil(personA.currentAge))
-  const deathAgeRange = Array.from({ length: 31 }, (_, i) => 70 + i) // 70-100
-  const investRateRange = [0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08]
+  const safeDeathMin = Math.max(63, Math.min(deathAgeMin, deathAgeMax - 1))
+  const safeDeathMax = Math.max(safeDeathMin + 1, Math.min(deathAgeMax, 120))
+  const safeRateMin = Math.max(0, Math.min(rateMin, rateMax - 1))
+  const safeRateMax = Math.max(safeRateMin + 1, Math.min(rateMax, 30))
+  const safeClaimMin = Math.max(62, Math.min(claimAgeMin, claimAgeMax - 1))
+  const safeClaimMax = Math.max(safeClaimMin + 1, Math.min(claimAgeMax, 70))
+  const deathAgeRange = Array.from(
+    { length: safeDeathMax - safeDeathMin + 1 },
+    (_, i) => safeDeathMin + i
+  )
+  const investRateRange = (() => {
+    const rates = []
+    // Aim for ~9 steps across the range; snap to sensible 0.5% increments
+    const span = safeRateMax - safeRateMin
+    const step = span <= 4 ? 0.5 : span <= 8 ? 1 : 2
+    for (let p = safeRateMin; p <= safeRateMax + 0.001; p += step) {
+      rates.push(parseFloat((p / 100).toFixed(4)))
+    }
+    return rates
+  })()
+  const claimAgeRange = Array.from(
+    { length: safeClaimMax - safeClaimMin + 1 },
+    (_, i) => safeClaimMin + i
+  )
 
   const heatmapData = useMemo(() => {
     if (mode === 'single') {
@@ -211,7 +241,7 @@ export default function Module3({ sharedState }) {
     const claimAgeAxis = heatXAxis.startsWith('claimAge') ? heatXAxis : heatYAxis
     const deathAgeAxis = heatXAxis.startsWith('deathAge') ? heatXAxis : heatYAxis
 
-    const claimAgeRange = Array.from({ length: 9 }, (_, i) => 62 + i) // 62-70
+
     const data = []
     const xSet = new Set()
     const ySet = new Set()
@@ -251,7 +281,7 @@ export default function Module3({ sharedState }) {
       xValues: [...xSet].sort((a, b) => a - b),
       yValues: [...ySet].sort((a, b) => a - b),
     }
-  }, [mode, calcMode, heatXAxis, heatYAxis, piaA, fraA, personA, piaB, fraB, personB, rate, result, deathAgeA, deathAgeB])
+  }, [mode, calcMode, heatXAxis, heatYAxis, piaA, fraA, personA, piaB, fraB, personB, rate, result, deathAgeA, deathAgeB, deathAgeRange, investRateRange, claimAgeRange])
 
   const optimal = result?.optimal
 
@@ -394,6 +424,61 @@ export default function Module3({ sharedState }) {
                 </select>
               </div>
             </div>
+          )
+        })()}
+
+        {/* Axis range controls */}
+        {(() => {
+          const activeAxes = new Set([heatXAxis, heatYAxis])
+          const showDeath = activeAxes.has('deathAge') || activeAxes.has('deathAgeA') || activeAxes.has('deathAgeB')
+          const showRate  = activeAxes.has('returnRate')
+          const showClaim = activeAxes.has('claimAge') || activeAxes.has('claimAgeA') || activeAxes.has('claimAgeB')
+          if (!showDeath && !showRate && !showClaim) return null
+          return (
+            <details style={{ marginBottom: 14 }}>
+              <summary style={{ cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, color: '#3b82f6', userSelect: 'none' }}>
+                Axis Ranges
+              </summary>
+              <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginTop: 10, padding: '12px 0' }}>
+                {showDeath && (
+                  <div>
+                    <div className="form-label" style={{ marginBottom: 6 }}>Death Age Range</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="number" className="form-input" style={{ width: 70 }} min={63} max={119}
+                        value={deathAgeMin} onChange={e => setDeathAgeMin(parseInt(e.target.value) || 70)} />
+                      <span style={{ color: '#4b5a7a' }}>to</span>
+                      <input type="number" className="form-input" style={{ width: 70 }} min={64} max={120}
+                        value={deathAgeMax} onChange={e => setDeathAgeMax(parseInt(e.target.value) || 100)} />
+                    </div>
+                  </div>
+                )}
+                {showRate && (
+                  <div>
+                    <div className="form-label" style={{ marginBottom: 6 }}>Return Rate Range (%)</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="number" className="form-input" style={{ width: 70 }} min={0} max={29} step={0.5}
+                        value={rateMin} onChange={e => setRateMin(parseFloat(e.target.value) || 0)} />
+                      <span style={{ color: '#4b5a7a' }}>to</span>
+                      <input type="number" className="form-input" style={{ width: 70 }} min={0.5} max={30} step={0.5}
+                        value={rateMax} onChange={e => setRateMax(parseFloat(e.target.value) || 8)} />
+                      <span style={{ fontSize: '0.8rem', color: '#4b5a7a' }}>%</span>
+                    </div>
+                  </div>
+                )}
+                {showClaim && (
+                  <div>
+                    <div className="form-label" style={{ marginBottom: 6 }}>Claim Age Range</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="number" className="form-input" style={{ width: 70 }} min={62} max={69}
+                        value={claimAgeMin} onChange={e => setClaimAgeMin(parseInt(e.target.value) || 62)} />
+                      <span style={{ color: '#4b5a7a' }}>to</span>
+                      <input type="number" className="form-input" style={{ width: 70 }} min={63} max={70}
+                        value={claimAgeMax} onChange={e => setClaimAgeMax(parseInt(e.target.value) || 70)} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </details>
           )
         })()}
 
