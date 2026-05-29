@@ -153,19 +153,19 @@ export function optimizeSingle({ birthYear, currentAge, sex, pia, mode, deathAge
       const cumRows = cumulativeByAge(monthly, claimAge, startAge, endAge, investRate)
       value = cumRows[cumRows.length - 1]?.value ?? 0
     } else {
+      // Probabilistic: survival-weighted future value.
+      // Walk year by year accumulating a balance that compounds at investRate
+      // and receives S(age) * income(age) as a deposit each year.
+      // Higher r → larger final balance, consistent with deterministic mode.
       const claimTotalMonths = totalMonths
-      value = 0
+      let balance = 0
       const maxAge = 119
       for (let age = startAge; age <= maxAge; age++) {
         const S = survivalProb(sex, currentAge, age)
-        const inThisYear = age * 12 >= claimTotalMonths ? monthly * 12 : 0
-        if (investRate > 0) {
-          const years_away = age - currentAge
-          value += S * inThisYear / Math.pow(1 + investRate, years_away)
-        } else {
-          value += S * inThisYear
-        }
+        const inThisYear = age * 12 >= claimTotalMonths ? S * monthly * 12 : 0
+        balance = balance * (1 + investRate) + inThisYear
       }
+      value = balance
     }
 
     results.push({ claimAge, value, monthlyBenefit: monthly })
@@ -254,13 +254,8 @@ export function optimizeCouple({ paramsA, paramsB, mode, investRate = 0 }) {
                                + SA * (1 - SB) * onlyAIncome
                                + (1 - SA) * SB * onlyBIncome
 
-          if (investRate > 0) {
-            const discountBase = Math.min(paramsA.currentAge, paramsB.currentAge)
-            const years_away = age - discountBase
-            value += expectedIncome / Math.pow(1 + investRate, years_away)
-          } else {
-            value += expectedIncome
-          }
+          // Compound forward: balance grows at investRate, receives expected income each year.
+          value = value * (1 + investRate) + expectedIncome
         }
       }
 

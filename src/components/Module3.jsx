@@ -72,21 +72,17 @@ function genSingleProbHeatmap(piaA, fraA, person, investRates) {
   }
 
   for (const r of investRates) {
-    for (let tm = 62 * 12; tm <= 70 * 12; tm += 12) {
-      const years = Math.floor(tm / 12)
-      const claimAge = { years, months: 0 }
-      const monthly = piaA * benefitFactor(claimAge, fraA)
-      const result = optimizeSingle({
-        birthYear: person.birthYear,
-        currentAge: person.currentAge,
-        sex: person.sex,
-        pia: piaA,
-        mode: 'probabilistic',
-        investRate: r,
-      })
-      // Find this specific claim age in the matrix
-      const entry = result.matrix.find(e => e.claimAge.years === years && e.claimAge.months === 0)
-      if (entry) data.push({ xVal: years, yVal: parseFloat(r.toFixed(3)), value: entry.value })
+    const result = optimizeSingle({
+      birthYear: person.birthYear,
+      currentAge: person.currentAge,
+      sex: person.sex,
+      pia: piaA,
+      mode: 'probabilistic',
+      investRate: r,
+    })
+    for (const entry of result.matrix) {
+      if (entry.claimAge.months !== 0) continue
+      data.push({ xVal: entry.claimAge.years, yVal: parseFloat(r.toFixed(3)), value: entry.value })
     }
   }
   return { data, xValues, yValues: investRates.map(r => parseFloat(r.toFixed(3))) }
