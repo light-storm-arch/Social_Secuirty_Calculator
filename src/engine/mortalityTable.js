@@ -31,7 +31,8 @@ export function survivalProb(sex, fromAge, targetAge) {
   const table = SSA_PERIOD_LIFE_TABLE_2022
   const qx = table[sex]
   const start = table.startAge
-  if (targetAge <= fromAge) return 1.0
+  if (targetAge === fromAge) return 1.0
+  if (targetAge < fromAge) return 0.0
   let S = 1.0
   for (let age = Math.floor(fromAge); age < Math.floor(targetAge); age++) {
     const idx = age - start

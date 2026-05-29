@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react'
+import React, { useState, useRef, useMemo, useEffect } from 'react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend, ResponsiveContainer
 } from 'recharts'
@@ -35,6 +35,15 @@ export default function Module2({ sharedState }) {
   const [invest, setInvest] = useState(false)
   const [investRate, setInvestRate] = useState(0.02)
   const [strategies, setStrategies] = useState(() => makeDefaultStrategies(piaA, fraA))
+
+  useEffect(() => {
+    const eAtAge = personA.estimateAtAgeMode === 'FRA'
+      ? getFRA(personA.birthYear)
+      : (personA.estimateAtAge ?? { years: 62, months: 0 })
+    const newPia = backOutPIA(personA.estimate, eAtAge, personA.birthYear)
+    const newFra = getFRA(personA.birthYear)
+    setStrategies(makeDefaultStrategies(newPia, newFra))
+  }, [personA.birthYear, personA.estimate, personA.estimateAtAgeYears, personA.estimateAtAgeMonths])
 
   const chartRef = useRef(null)
 

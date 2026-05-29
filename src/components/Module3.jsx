@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import { getFRA, backOutPIA, benefitFactor, optimizeSingle, optimizeCouple } from '../engine/ssEngine.js'
 import SensitivityHeatmap from './SensitivityHeatmap.jsx'
 
@@ -100,8 +100,25 @@ export default function Module3({ sharedState }) {
   const [invest, setInvest] = useState(false)
   const [investRate, setInvestRate] = useState(0.02)
 
-  const [heatXAxis, setHeatXAxis] = useState('claimAge')
-  const [heatYAxis, setHeatYAxis] = useState(calcMode === 'deterministic' ? 'deathAge' : 'returnRate')
+  const getDefaultAxes = (cm, m) => {
+    if (m === 'single') {
+      return cm === 'deterministic'
+        ? { x: 'claimAge', y: 'deathAge' }
+        : { x: 'claimAge', y: 'returnRate' }
+    }
+    return cm === 'deterministic'
+      ? { x: 'claimAgeA', y: 'claimAgeB' }
+      : { x: 'claimAgeA', y: 'claimAgeB' }
+  }
+
+  const [heatXAxis, setHeatXAxis] = useState(() => getDefaultAxes('deterministic', 'single').x)
+  const [heatYAxis, setHeatYAxis] = useState(() => getDefaultAxes('deterministic', 'single').y)
+
+  useEffect(() => {
+    const defaults = getDefaultAxes(calcMode, mode)
+    setHeatXAxis(defaults.x)
+    setHeatYAxis(defaults.y)
+  }, [calcMode, mode])
 
   const piaA = useMemo(() => getPIA(personA), [personA])
   const fraA = useMemo(() => getFRA(personA.birthYear), [personA.birthYear])
@@ -280,6 +297,47 @@ export default function Module3({ sharedState }) {
 
       <div className="card">
         <div className="card-title">Sensitivity Heatmap</div>
+
+        {/* Axis selector UI */}
+        {(() => {
+          const axisOptions = mode === 'single'
+            ? calcMode === 'deterministic'
+              ? ['claimAge', 'deathAge']
+              : ['claimAge', 'returnRate']
+            : calcMode === 'deterministic'
+              ? ['claimAgeA', 'claimAgeB', 'deathAgeA', 'deathAgeB']
+              : ['claimAgeA', 'claimAgeB', 'returnRate']
+          const axisLabels = {
+            claimAge: 'Claim Age',
+            deathAge: 'Death Age',
+            returnRate: 'Return Rate',
+            claimAgeA: 'Person A Claim Age',
+            claimAgeB: 'Person B Claim Age',
+            deathAgeA: 'Person A Death Age',
+            deathAgeB: 'Person B Death Age',
+          }
+          return (
+            <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+              <div className="form-group" style={{ minWidth: 160 }}>
+                <label className="form-label">X Axis</label>
+                <select className="form-input" value={heatXAxis} onChange={e => setHeatXAxis(e.target.value)}>
+                  {axisOptions.map(opt => (
+                    <option key={opt} value={opt}>{axisLabels[opt]}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group" style={{ minWidth: 160 }}>
+                <label className="form-label">Y Axis</label>
+                <select className="form-input" value={heatYAxis} onChange={e => setHeatYAxis(e.target.value)}>
+                  {axisOptions.filter(opt => opt !== heatXAxis).map(opt => (
+                    <option key={opt} value={opt}>{axisLabels[opt]}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )
+        })()}
+
         <p style={{ fontSize: '0.82rem', color: '#4b5a7a', marginBottom: 12 }}>
           {mode === 'single'
             ? calcMode === 'deterministic'
@@ -287,29 +345,26 @@ export default function Module3({ sharedState }) {
               : 'Claim age (x) vs. real return rate (y). Color = survival-weighted lifetime value.'
             : 'Person A claim age (x) vs. Person B claim age (y). Color = household lifetime value.'}
         </p>
-        {heatmapData ? (
-          <SensitivityHeatmap
-            data={heatmapData.data}
-            xLabel={mode === 'single' ? 'Claim Age' : 'Person A Claim Age'}
-            yLabel={
-              mode === 'single'
-                ? calcMode === 'deterministic' ? 'Death Age' : 'Return Rate'
-                : 'Person B Claim Age'
-            }
-            xValues={heatmapData.xValues}
-            yValues={heatmapData.yValues}
-            optimalX={
-              mode === 'single'
-                ? optimal?.claimAge?.years
-                : optimal?.claimAgeA?.years
-            }
-            optimalY={
-              mode === 'single'
-                ? calcMode === 'deterministic' ? deathAgeA : parseFloat(rate.toFixed(3))
-                : optimal?.claimAgeB?.years
-            }
-          />
-        ) : (
+        {heatmapData ? (() => {
+          const optimalCell = heatmapData.data && heatmapData.data.length > 0
+            ? heatmapData.data.reduce((best, cell) => cell.value > best.value ? cell : best, heatmapData.data[0])
+            : null
+          return (
+            <SensitivityHeatmap
+              data={heatmapData.data}
+              xLabel={mode === 'single' ? 'Claim Age' : 'Person A Claim Age'}
+              yLabel={
+                mode === 'single'
+                  ? calcMode === 'deterministic' ? 'Death Age' : 'Return Rate'
+                  : 'Person B Claim Age'
+              }
+              xValues={heatmapData.xValues}
+              yValues={heatmapData.yValues}
+              optimalX={optimalCell?.xVal}
+              optimalY={optimalCell?.yVal}
+            />
+          )
+        })() : (
           <div className="loading-text">Computing heatmap...</div>
         )}
       </div>

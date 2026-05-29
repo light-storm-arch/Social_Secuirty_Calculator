@@ -255,7 +255,8 @@ export function optimizeCouple({ paramsA, paramsB, mode, investRate = 0 }) {
                                + (1 - SA) * SB * onlyBIncome
 
           if (investRate > 0) {
-            const years_away = age - startAge
+            const discountBase = Math.min(paramsA.currentAge, paramsB.currentAge)
+            const years_away = age - discountBase
             value += expectedIncome / Math.pow(1 + investRate, years_away)
           } else {
             value += expectedIncome

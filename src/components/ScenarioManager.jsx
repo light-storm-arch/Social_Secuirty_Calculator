@@ -44,9 +44,9 @@ export default function ScenarioManager({ sharedState, sharedSetters }) {
         setMessage({ type: 'error', text: `Scenario "${name}" not found.` })
         return
       }
-      if (data.mode) sharedSetters.setMode(data.mode)
-      if (data.personA) sharedSetters.setPersonA(data.personA)
-      if (data.personB) sharedSetters.setPersonB(data.personB)
+      if (data.mode !== undefined) sharedSetters.setMode(data.mode)
+      if (data.personA !== undefined) sharedSetters.setPersonA(data.personA)
+      if (data.personB !== undefined) sharedSetters.setPersonB(data.personB)
       setMessage({ type: 'success', text: `Loaded "${name}"` })
     } catch (e) {
       setMessage({ type: 'error', text: 'Could not load scenario.' })
