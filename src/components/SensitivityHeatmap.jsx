@@ -30,7 +30,7 @@ function valueToColor(value, min, max) {
   return `rgb(${r},${g},${b})`
 }
 
-export default function SensitivityHeatmap({ data, xLabel, yLabel, xValues, yValues, optimalX, optimalY }) {
+export default function SensitivityHeatmap({ data, xLabel, yLabel, xValues, yValues, optimalX, optimalY, rowWeights, rowWeightLabel }) {
   const [tooltip, setTooltip] = useState(null)
 
   if (!data || data.length === 0 || !xValues || !yValues) {
@@ -40,6 +40,21 @@ export default function SensitivityHeatmap({ data, xLabel, yLabel, xValues, yVal
   const values = data.map(d => d.value)
   const minVal = Math.min(...values)
   const maxVal = Math.max(...values)
+
+  // Normalize per-row weights to opacity (0.18..1.0) so the most-likely rows pop
+  // and unlikely rows fade — without becoming invisible.
+  const weightOpacity = (() => {
+    if (!rowWeights) return null
+    const ws = yValues.map(yv => rowWeights.get(yv) ?? 0)
+    const wMax = Math.max(...ws, 0)
+    if (wMax <= 0) return null
+    const map = new Map()
+    yValues.forEach((yv, i) => {
+      const norm = ws[i] / wMax
+      map.set(yv, 0.18 + 0.82 * norm)
+    })
+    return map
+  })()
 
   const cellW = Math.max(12, Math.min(40, Math.floor(600 / xValues.length)))
   const cellH = Math.max(12, Math.min(28, Math.floor(400 / yValues.length)))
@@ -57,8 +72,8 @@ export default function SensitivityHeatmap({ data, xLabel, yLabel, xValues, yVal
     lookup.set(`${d.xVal},${d.yVal}`, d.value)
   }
 
-  const handleMouseMove = useCallback((e, xVal, yVal, value) => {
-    setTooltip({ x: e.clientX + 12, y: e.clientY - 24, xVal, yVal, value })
+  const handleMouseMove = useCallback((e, xVal, yVal, value, weight) => {
+    setTooltip({ x: e.clientX + 12, y: e.clientY - 24, xVal, yVal, value, weight })
   }, [])
   const handleMouseLeave = useCallback(() => setTooltip(null), [])
 
@@ -131,6 +146,7 @@ export default function SensitivityHeatmap({ data, xLabel, yLabel, xValues, yVal
             if (value === undefined) return null
             const fill = valueToColor(value, minVal, maxVal)
             const isOptimal = xv === optimalX && yv === optimalY
+            const opacity = weightOpacity ? weightOpacity.get(yv) ?? 0.18 : 1
             return (
               <rect
                 key={`${xi}-${yi}`}
@@ -139,9 +155,10 @@ export default function SensitivityHeatmap({ data, xLabel, yLabel, xValues, yVal
                 width={cellW}
                 height={cellH}
                 fill={fill}
+                fillOpacity={opacity}
                 stroke={isOptimal ? 'white' : 'none'}
                 strokeWidth={isOptimal ? 2 : 0}
-                onMouseMove={e => handleMouseMove(e, xv, yv, value)}
+                onMouseMove={e => handleMouseMove(e, xv, yv, value, rowWeights?.get(yv))}
                 onMouseLeave={handleMouseLeave}
                 style={{ cursor: 'crosshair' }}
               />
@@ -174,6 +191,9 @@ export default function SensitivityHeatmap({ data, xLabel, yLabel, xValues, yVal
           <div>{xLabel}: <strong>{tooltip.xVal}</strong></div>
           <div>{yLabel}: <strong>{tooltip.yVal}</strong></div>
           <div>Value: <strong>${Math.round(tooltip.value).toLocaleString()}</strong></div>
+          {tooltip.weight !== undefined && tooltip.weight !== null && (
+            <div>{rowWeightLabel ?? 'Probability'}: <strong>{(tooltip.weight * 100).toFixed(2)}%</strong></div>
+          )}
         </div>
       )}
 
