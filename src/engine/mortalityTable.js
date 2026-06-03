@@ -49,3 +49,22 @@ export function jointSurvivalProbs(sexA, fromAgeA, sexB, fromAgeB, targetAge) {
     SB: survivalProb(sexB, fromAgeB, targetAge),
   }
 }
+
+// Expected age at death given alive at currentAge: x + sum_{k>=1} S(x+k|x)
+export function lifeExpectancy(sex, currentAge) {
+  let sum = 0
+  for (let k = 1; k <= 200; k++) {
+    const s = survivalProb(sex, currentAge, currentAge + k)
+    if (s <= 0) break
+    sum += s
+  }
+  return currentAge + sum
+}
+
+// P(die at exact integer age deathAge | alive at currentAge)
+// = S(deathAge | currentAge) - S(deathAge+1 | currentAge)
+export function pDeathAtAge(sex, currentAge, deathAge) {
+  const sNow = survivalProb(sex, currentAge, deathAge)
+  const sNext = survivalProb(sex, currentAge, deathAge + 1)
+  return Math.max(0, sNow - sNext)
+}
