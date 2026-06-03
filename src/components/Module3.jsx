@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react'
-import { getFRA, backOutPIA, benefitFactor, optimizeSingle, optimizeCouple } from '../engine/ssEngine.js'
+import { getFRA, backOutPIA, benefitFactor, optimizeSingle, optimizeCouple, spousalTopUp, survivorBenefit } from '../engine/ssEngine.js'
+import { lifeExpectancy, pDeathAtAge } from '../engine/mortalityTable.js'
 import SensitivityHeatmap from './SensitivityHeatmap.jsx'
 
 function resolveEstimateAtAge(person) {
@@ -18,41 +19,21 @@ function ageLabel(a) {
   return `${a.years}y${a.months}m`
 }
 
-function buildSingleHeatmapData(matrix, mode, invest, deathAgeRange) {
-  // X = claim age (years 62-70), Y = death age (deterministic) or return rate (probabilistic)
-  if (mode === 'deterministic') {
-    // We need to re-run for each death age
-    return null // Handled separately
-  }
-  // Probabilistic: claim age vs return rate — but matrix is single-dim over claim ages
-  // We'll show claim age on X, benefit on Y (just the matrix values)
-  return null
-}
-
-// Generate deterministic heatmap data for single person
-function genSingleDetHeatmap(piaA, fraA, person, deathAges, investRateFixed, startAge) {
+// Single-person heatmap: claim age (X) vs death age (Y).
+// Cell value = deterministic lifetime $ if you die at that age, with optional invest rate.
+function genSingleClaimDeathHeatmap(piaA, fraA, claimAges, deathAges, investRate, startAge) {
   const data = []
-  const xValues = [] // claim age months -> label
+  const xValues = [...claimAges]
   const yValues = [...deathAges]
 
-  for (let tm = 62 * 12; tm <= 70 * 12; tm += 12) {
-    const years = Math.floor(tm / 12)
-    xValues.push(years)
-  }
-
   for (const da of deathAges) {
-    for (let tm = 62 * 12; tm <= 70 * 12; tm += 12) {
-      const years = Math.floor(tm / 12)
+    for (const years of claimAges) {
       const claimAge = { years, months: 0 }
       const monthly = piaA * benefitFactor(claimAge, fraA)
       let balance = 0
       for (let age = startAge; age <= da; age++) {
         const income = age >= years ? monthly * 12 : 0
-        if (investRateFixed > 0) {
-          balance = balance * (1 + investRateFixed) + income
-        } else {
-          balance += income
-        }
+        balance = balance * (1 + investRate) + income
       }
       data.push({ xVal: years, yVal: da, value: balance })
     }
@@ -60,32 +41,103 @@ function genSingleDetHeatmap(piaA, fraA, person, deathAges, investRateFixed, sta
   return { data, xValues, yValues }
 }
 
-// Generate probabilistic heatmap: claim age vs return rate
-function genSingleProbHeatmap(piaA, fraA, person, investRates) {
-  const data = []
-  const xValues = []
-  const yValues = [...investRates]
-  const startAge = Math.max(62, Math.ceil(person.currentAge))
-
-  for (let tm = 62 * 12; tm <= 70 * 12; tm += 12) {
-    xValues.push(Math.floor(tm / 12))
+// Couple heatmap helper: compute household deterministic lifetime $ for a given
+// (claimAgeA, claimAgeB, deathA, deathB). Mirrors optimizeCouple deterministic loop.
+function coupleLifetimeValue({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, deathB, investRate, startAge }) {
+  const fraA = getFRA(paramsA.birthYear)
+  const fraB = getFRA(paramsB.birthYear)
+  const higherEarnerIsA = paramsA.pia >= paramsB.pia
+  const monthlyA_own = paramsA.pia * benefitFactor(claimAgeA, fraA)
+  const monthlyB_own = paramsB.pia * benefitFactor(claimAgeB, fraB)
+  let monthlyA_spousal = monthlyA_own
+  let monthlyB_spousal = monthlyB_own
+  if (higherEarnerIsA) {
+    const topUp = spousalTopUp(paramsA.pia, monthlyB_own, claimAgeB, fraB)
+    monthlyB_spousal = monthlyB_own + topUp
+  } else {
+    const topUp = spousalTopUp(paramsB.pia, monthlyA_own, claimAgeA, fraA)
+    monthlyA_spousal = monthlyA_own + topUp
   }
-
-  for (const r of investRates) {
-    const result = optimizeSingle({
-      birthYear: person.birthYear,
-      currentAge: person.currentAge,
-      sex: person.sex,
-      pia: piaA,
-      mode: 'probabilistic',
-      investRate: r,
-    })
-    for (const entry of result.matrix) {
-      if (entry.claimAge.months !== 0) continue
-      data.push({ xVal: entry.claimAge.years, yVal: parseFloat(r.toFixed(3)), value: entry.value })
+  const survivorIfADies = survivorBenefit(monthlyB_own, monthlyA_own)
+  const survivorIfBDies = survivorBenefit(monthlyA_own, monthlyB_own)
+  const tmA = claimAgeA.years * 12 + claimAgeA.months
+  const tmB = claimAgeB.years * 12 + claimAgeB.months
+  const end = Math.max(deathA, deathB)
+  let val = 0
+  for (let age = Math.ceil(startAge); age <= end; age++) {
+    const aAlive = age <= deathA
+    const bAlive = age <= deathB
+    const ageMonths = age * 12
+    const aStarted = ageMonths >= tmA
+    const bStarted = ageMonths >= tmB
+    let income = 0
+    if (aAlive && bAlive) {
+      income = (aStarted ? (higherEarnerIsA ? monthlyA_own : monthlyA_spousal) : 0) * 12
+             + (bStarted ? (higherEarnerIsA ? monthlyB_spousal : monthlyB_own) : 0) * 12
+    } else if (aAlive) {
+      income = (aStarted ? survivorIfBDies : 0) * 12
+    } else if (bAlive) {
+      income = (bStarted ? survivorIfADies : 0) * 12
     }
+    val = val * (1 + investRate) + income
   }
-  return { data, xValues, yValues: investRates.map(r => parseFloat(r.toFixed(3))) }
+  return val
+}
+
+// Build per-year cumulative rows for a single claim age (used by verification table)
+function singleCumulative(pia, fra, claimAge, startAge, endAge, investRate) {
+  const monthly = pia * benefitFactor(claimAge, fra)
+  const tmClaim = claimAge.years * 12 + claimAge.months
+  const rows = []
+  let balance = 0
+  for (let age = Math.ceil(startAge); age <= endAge; age++) {
+    const income = age * 12 >= tmClaim ? monthly * 12 : 0
+    balance = balance * (1 + investRate) + income
+    rows.push({ age, value: balance })
+  }
+  return { monthly, rows }
+}
+
+// Per-year cumulative rows for a couple at a given claim combo
+function coupleCumulative({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, deathB, investRate, startAge }) {
+  const fraA = getFRA(paramsA.birthYear)
+  const fraB = getFRA(paramsB.birthYear)
+  const higherEarnerIsA = paramsA.pia >= paramsB.pia
+  const monthlyA_own = paramsA.pia * benefitFactor(claimAgeA, fraA)
+  const monthlyB_own = paramsB.pia * benefitFactor(claimAgeB, fraB)
+  let monthlyA_spousal = monthlyA_own
+  let monthlyB_spousal = monthlyB_own
+  if (higherEarnerIsA) {
+    monthlyB_spousal = monthlyB_own + spousalTopUp(paramsA.pia, monthlyB_own, claimAgeB, fraB)
+  } else {
+    monthlyA_spousal = monthlyA_own + spousalTopUp(paramsB.pia, monthlyA_own, claimAgeA, fraA)
+  }
+  const survivorIfADies = survivorBenefit(monthlyB_own, monthlyA_own)
+  const survivorIfBDies = survivorBenefit(monthlyA_own, monthlyB_own)
+  const tmA = claimAgeA.years * 12 + claimAgeA.months
+  const tmB = claimAgeB.years * 12 + claimAgeB.months
+  const end = Math.max(deathA, deathB)
+  const rows = []
+  let balance = 0
+  for (let age = Math.ceil(startAge); age <= end; age++) {
+    const aAlive = age <= deathA
+    const bAlive = age <= deathB
+    const ageMonths = age * 12
+    const aStarted = ageMonths >= tmA
+    const bStarted = ageMonths >= tmB
+    let income = 0
+    if (aAlive && bAlive) {
+      income = (aStarted ? (higherEarnerIsA ? monthlyA_own : monthlyA_spousal) : 0) * 12
+             + (bStarted ? (higherEarnerIsA ? monthlyB_spousal : monthlyB_own) : 0) * 12
+    } else if (aAlive) {
+      income = (aStarted ? survivorIfBDies : 0) * 12
+    } else if (bAlive) {
+      income = (bStarted ? survivorIfADies : 0) * 12
+    }
+    balance = balance * (1 + investRate) + income
+    rows.push({ age, value: balance })
+  }
+  return { monthlyA: monthlyA_own, monthlyB: monthlyB_own, rows }
 }
 
 export default function Module3({ sharedState }) {
@@ -99,20 +151,12 @@ export default function Module3({ sharedState }) {
   // Heatmap axis range controls
   const [deathAgeMin, setDeathAgeMin] = useState(70)
   const [deathAgeMax, setDeathAgeMax] = useState(100)
-  const [rateMin, setRateMin] = useState(0)
-  const [rateMax, setRateMax] = useState(8)   // stored as whole-number percent, converted on use
   const [claimAgeMin, setClaimAgeMin] = useState(62)
   const [claimAgeMax, setClaimAgeMax] = useState(70)
 
   const getDefaultAxes = (cm, m) => {
-    if (m === 'single') {
-      return cm === 'deterministic'
-        ? { x: 'claimAge', y: 'deathAge' }
-        : { x: 'claimAge', y: 'returnRate' }
-    }
-    return cm === 'deterministic'
-      ? { x: 'claimAgeA', y: 'claimAgeB' }
-      : { x: 'claimAgeA', y: 'claimAgeB' }
+    if (m === 'single') return { x: 'claimAge', y: 'deathAge' }
+    return { x: 'claimAgeA', y: 'claimAgeB' }
   }
 
   const [heatXAxis, setHeatXAxis] = useState(() => getDefaultAxes('deterministic', 'single').x)
@@ -168,38 +212,32 @@ export default function Module3({ sharedState }) {
   const startAge = Math.max(62, Math.ceil(personA.currentAge))
   const safeDeathMin = Math.max(63, Math.min(deathAgeMin, deathAgeMax - 1))
   const safeDeathMax = Math.max(safeDeathMin + 1, Math.min(deathAgeMax, 120))
-  const safeRateMin = Math.max(0, Math.min(rateMin, rateMax - 1))
-  const safeRateMax = Math.max(safeRateMin + 1, Math.min(rateMax, 30))
   const safeClaimMin = Math.max(62, Math.min(claimAgeMin, claimAgeMax - 1))
   const safeClaimMax = Math.max(safeClaimMin + 1, Math.min(claimAgeMax, 70))
   const deathAgeRange = Array.from(
     { length: safeDeathMax - safeDeathMin + 1 },
-    (_, i) => safeDeathMin + i
+    (_, i) => safeDeathMin + i,
   )
-  const investRateRange = (() => {
-    const rates = []
-    // Aim for ~9 steps across the range; snap to sensible 0.5% increments
-    const span = safeRateMax - safeRateMin
-    const step = span <= 4 ? 0.5 : span <= 8 ? 1 : 2
-    for (let p = safeRateMin; p <= safeRateMax + 0.001; p += step) {
-      rates.push(parseFloat((p / 100).toFixed(4)))
-    }
-    return rates
-  })()
   const claimAgeRange = Array.from(
     { length: safeClaimMax - safeClaimMin + 1 },
-    (_, i) => safeClaimMin + i
+    (_, i) => safeClaimMin + i,
+  )
+
+  // Life expectancy (probabilistic highlight target)
+  const lifeExpA = useMemo(
+    () => lifeExpectancy(personA.sex, Math.max(personA.currentAge, 62)),
+    [personA.sex, personA.currentAge],
+  )
+  const lifeExpB = useMemo(
+    () => (mode === 'couple' ? lifeExpectancy(personB.sex, Math.max(personB.currentAge, 62)) : null),
+    [mode, personB?.sex, personB?.currentAge],
   )
 
   const heatmapData = useMemo(() => {
     if (mode === 'single') {
-      // Build the raw grid (always claimAge on one axis, deathAge/returnRate on the other)
-      const raw = calcMode === 'deterministic'
-        ? genSingleDetHeatmap(piaA, fraA, personA, deathAgeRange, rate, startAge)
-        : genSingleProbHeatmap(piaA, fraA, personA, investRateRange)
-      // Transpose if user swapped the axes
-      const xIsClaimAge = (calcMode === 'deterministic' && heatXAxis === 'claimAge') ||
-                          (calcMode === 'probabilistic' && heatXAxis === 'claimAge')
+      // Always claim age × death age in both modes; rate is the user-toggled invest rate.
+      const raw = genSingleClaimDeathHeatmap(piaA, fraA, claimAgeRange, deathAgeRange, rate, startAge)
+      const xIsClaimAge = heatXAxis === 'claimAge'
       if (xIsClaimAge) return raw
       return {
         data: raw.data.map(d => ({ xVal: d.yVal, yVal: d.xVal, value: d.value })),
@@ -211,7 +249,7 @@ export default function Module3({ sharedState }) {
     // Couple mode
     if (!result?.heatmapMatrix) return null
 
-    // Axes involving claim ages — pull from the already-computed heatmapMatrix
+    // Both axes are claim ages — pull from the already-computed heatmapMatrix
     if ((heatXAxis === 'claimAgeA' || heatXAxis === 'claimAgeB') &&
         (heatYAxis === 'claimAgeA' || heatYAxis === 'claimAgeB')) {
       const data = []
@@ -232,8 +270,9 @@ export default function Module3({ sharedState }) {
       }
     }
 
-    // Couple deterministic: one claim age axis + one death age axis
-    // Pin the other claim age at optimal; sweep the death age
+    // Couple: one claim age axis + one death age axis.
+    // Pin the other claim age at optimal; for probabilistic mode also pin the
+    // other spouse's death age at their life expectancy (otherwise default 85).
     if (!result?.optimal) return null
     const pinnedClaimAgeA = result.optimal.claimAgeA ?? { years: 67, months: 0 }
     const pinnedClaimAgeB = result.optimal.claimAgeB ?? { years: 67, months: 0 }
@@ -255,24 +294,15 @@ export default function Module3({ sharedState }) {
         xSet.add(xv)
         ySet.add(yv)
 
-        // Score this combo
-        const monthlyA = piaA * benefitFactor(claimAgeA, fraA)
-        const monthlyB = piaB * benefitFactor(claimAgeB, fraB ?? fraA)
-        const deathA = deathAgeAxis === 'deathAgeA' ? da : deathAgeA
-        const deathB = deathAgeAxis === 'deathAgeB' ? da : deathAgeB
-        let val = 0
-        const end = Math.max(deathA, deathB)
-        for (let age = Math.ceil(startAge); age <= end; age++) {
-          const aAlive = age <= deathA
-          const bAlive = age <= deathB
-          const aStarted = age >= claimAgeA.years
-          const bStarted = age >= claimAgeB.years
-          let income = 0
-          if (aAlive && bAlive) income = (aStarted ? monthlyA : 0) * 12 + (bStarted ? monthlyB : 0) * 12
-          else if (aAlive) income = (aStarted ? Math.max(monthlyA, monthlyB) : 0) * 12
-          else if (bAlive) income = (bStarted ? Math.max(monthlyB, monthlyA) : 0) * 12
-          val = rate > 0 ? val * (1 + rate) + income : val + income
-        }
+        const dA = deathAgeAxis === 'deathAgeA' ? da : deathAgeA
+        const dB = deathAgeAxis === 'deathAgeB' ? da : deathAgeB
+        const val = coupleLifetimeValue({
+          paramsA: { birthYear: personA.birthYear, currentAge: personA.currentAge, pia: piaA },
+          paramsB: { birthYear: personB.birthYear, currentAge: personB.currentAge, pia: piaB },
+          claimAgeA, claimAgeB,
+          deathA: dA, deathB: dB,
+          investRate: rate, startAge,
+        })
         data.push({ xVal: xv, yVal: yv, value: val })
       }
     }
@@ -281,7 +311,55 @@ export default function Module3({ sharedState }) {
       xValues: [...xSet].sort((a, b) => a - b),
       yValues: [...ySet].sort((a, b) => a - b),
     }
-  }, [mode, calcMode, heatXAxis, heatYAxis, piaA, fraA, personA, piaB, fraB, personB, rate, result, deathAgeA, deathAgeB, deathAgeRange, investRateRange, claimAgeRange])
+  }, [mode, calcMode, heatXAxis, heatYAxis, piaA, fraA, personA, piaB, fraB, personB, rate, result, deathAgeA, deathAgeB, startAge, deathAgeRange, claimAgeRange])
+
+  // Row weights (P(death@age)) for probabilistic mode when an axis is a death age
+  const heatmapRowWeights = useMemo(() => {
+    if (calcMode !== 'probabilistic') return null
+    const sexForAxis = (axis) => {
+      if (axis === 'deathAge') return personA.sex
+      if (axis === 'deathAgeA') return personA.sex
+      if (axis === 'deathAgeB') return personB?.sex
+      return null
+    }
+    const ageForAxis = (axis) => {
+      if (axis === 'deathAge' || axis === 'deathAgeA') return personA.currentAge
+      if (axis === 'deathAgeB') return personB?.currentAge
+      return null
+    }
+    const isDeath = (axis) => axis === 'deathAge' || axis === 'deathAgeA' || axis === 'deathAgeB'
+    if (!isDeath(heatYAxis)) return null
+    const sex = sexForAxis(heatYAxis)
+    const fromAge = Math.max(62, Math.ceil(ageForAxis(heatYAxis) ?? 62))
+    if (!sex) return null
+    const map = new Map()
+    for (const da of deathAgeRange) {
+      map.set(da, pDeathAtAge(sex, fromAge, da))
+    }
+    return map
+  }, [calcMode, heatYAxis, personA, personB, deathAgeRange])
+
+  // Probabilistic-mode optimal cell: the (claim age, death age) cell at life
+  // expectancy that maximizes lifetime value within that row.
+  const probOptimalCell = useMemo(() => {
+    if (calcMode !== 'probabilistic') return null
+    if (!heatmapData) return null
+    const isDeath = (axis) => axis === 'deathAge' || axis === 'deathAgeA' || axis === 'deathAgeB'
+    if (!isDeath(heatYAxis)) return null
+    // Pick the death age in our grid closest to the relevant life expectancy
+    const targetLE = (heatYAxis === 'deathAgeB' && lifeExpB != null) ? lifeExpB : lifeExpA
+    let nearestDa = deathAgeRange[0]
+    let best = Infinity
+    for (const da of deathAgeRange) {
+      const d = Math.abs(da - targetLE)
+      if (d < best) { best = d; nearestDa = da }
+    }
+    // Find best cell in that row
+    const rowCells = heatmapData.data.filter(c => c.yVal === nearestDa)
+    if (rowCells.length === 0) return null
+    const bestCell = rowCells.reduce((b, c) => c.value > b.value ? c : b, rowCells[0])
+    return { x: bestCell.xVal, y: bestCell.yVal, lifeExpectancy: targetLE }
+  }, [calcMode, heatmapData, heatYAxis, lifeExpA, lifeExpB, deathAgeRange])
 
   const optimal = result?.optimal
 
@@ -390,16 +468,11 @@ export default function Module3({ sharedState }) {
         {/* Axis selector UI */}
         {(() => {
           const axisOptions = mode === 'single'
-            ? calcMode === 'deterministic'
-              ? ['claimAge', 'deathAge']
-              : ['claimAge', 'returnRate']
-            : calcMode === 'deterministic'
-              ? ['claimAgeA', 'claimAgeB', 'deathAgeA', 'deathAgeB']
-              : ['claimAgeA', 'claimAgeB', 'returnRate']
+            ? ['claimAge', 'deathAge']
+            : ['claimAgeA', 'claimAgeB', 'deathAgeA', 'deathAgeB']
           const axisLabels = {
             claimAge: 'Claim Age',
             deathAge: 'Death Age',
-            returnRate: 'Return Rate',
             claimAgeA: 'Person A Claim Age',
             claimAgeB: 'Person B Claim Age',
             deathAgeA: 'Person A Death Age',
@@ -431,9 +504,8 @@ export default function Module3({ sharedState }) {
         {(() => {
           const activeAxes = new Set([heatXAxis, heatYAxis])
           const showDeath = activeAxes.has('deathAge') || activeAxes.has('deathAgeA') || activeAxes.has('deathAgeB')
-          const showRate  = activeAxes.has('returnRate')
           const showClaim = activeAxes.has('claimAge') || activeAxes.has('claimAgeA') || activeAxes.has('claimAgeB')
-          if (!showDeath && !showRate && !showClaim) return null
+          if (!showDeath && !showClaim) return null
           return (
             <details style={{ marginBottom: 14 }}>
               <summary style={{ cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, color: '#3b82f6', userSelect: 'none' }}>
@@ -449,19 +521,6 @@ export default function Module3({ sharedState }) {
                       <span style={{ color: '#4b5a7a' }}>to</span>
                       <input type="number" className="form-input" style={{ width: 70 }} min={64} max={120}
                         value={deathAgeMax} onChange={e => setDeathAgeMax(parseInt(e.target.value) || 100)} />
-                    </div>
-                  </div>
-                )}
-                {showRate && (
-                  <div>
-                    <div className="form-label" style={{ marginBottom: 6 }}>Return Rate Range (%)</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <input type="number" className="form-input" style={{ width: 70 }} min={0} max={29} step={0.5}
-                        value={rateMin} onChange={e => setRateMin(parseFloat(e.target.value) || 0)} />
-                      <span style={{ color: '#4b5a7a' }}>to</span>
-                      <input type="number" className="form-input" style={{ width: 70 }} min={0.5} max={30} step={0.5}
-                        value={rateMax} onChange={e => setRateMax(parseFloat(e.target.value) || 8)} />
-                      <span style={{ fontSize: '0.8rem', color: '#4b5a7a' }}>%</span>
                     </div>
                   </div>
                 )}
@@ -482,15 +541,34 @@ export default function Module3({ sharedState }) {
           )
         })()}
 
+        {calcMode === 'probabilistic' && (
+          <div style={{ marginBottom: 10, fontSize: '0.82rem', color: '#4b5a7a' }}>
+            Cells are tinted by the probability of dying at each age (SSA 2022 table).
+            Brighter rows are more likely; the white-outlined cell is the optimal claim age
+            at {mode === 'couple' ? "each person's" : 'your'} life expectancy
+            {probOptimalCell?.lifeExpectancy != null && (
+              <> (<strong>{probOptimalCell.lifeExpectancy.toFixed(1)}</strong>)</>
+            )}.
+          </div>
+        )}
+
         {heatmapData ? (() => {
           const axisLabels = {
-            claimAge: 'Claim Age', deathAge: 'Death Age', returnRate: 'Return Rate (%)',
+            claimAge: 'Claim Age', deathAge: 'Death Age',
             claimAgeA: 'Person A Claim Age', claimAgeB: 'Person B Claim Age',
             deathAgeA: 'Person A Death Age', deathAgeB: 'Person B Death Age',
           }
-          const optimalCell = heatmapData.data && heatmapData.data.length > 0
-            ? heatmapData.data.reduce((best, cell) => cell.value > best.value ? cell : best, heatmapData.data[0])
-            : null
+          // Optimal cell: probabilistic mode highlights life-expectancy row's best
+          // claim age; deterministic mode highlights the grid maximum.
+          let optimalX, optimalY
+          if (calcMode === 'probabilistic' && probOptimalCell) {
+            optimalX = probOptimalCell.x
+            optimalY = probOptimalCell.y
+          } else if (heatmapData.data && heatmapData.data.length > 0) {
+            const best = heatmapData.data.reduce((b, c) => c.value > b.value ? c : b, heatmapData.data[0])
+            optimalX = best.xVal
+            optimalY = best.yVal
+          }
           return (
             <SensitivityHeatmap
               data={heatmapData.data}
@@ -498,13 +576,161 @@ export default function Module3({ sharedState }) {
               yLabel={axisLabels[heatYAxis] ?? heatYAxis}
               xValues={heatmapData.xValues}
               yValues={heatmapData.yValues}
-              optimalX={optimalCell?.xVal}
-              optimalY={optimalCell?.yVal}
+              optimalX={optimalX}
+              optimalY={optimalY}
+              rowWeights={heatmapRowWeights}
+              rowWeightLabel="P(death @ age)"
             />
           )
         })() : (
           <div className="loading-text">Computing heatmap...</div>
         )}
+      </div>
+
+      {calcMode === 'deterministic' && (
+        <LifetimeValueTable
+          mode={mode}
+          piaA={piaA}
+          fraA={fraA}
+          piaB={piaB}
+          fraB={fraB}
+          personA={personA}
+          personB={personB}
+          deathAgeA={deathAgeA}
+          deathAgeB={deathAgeB}
+          investRate={rate}
+          startAge={startAge}
+          optimal={optimal}
+        />
+      )}
+    </div>
+  )
+}
+
+function LifetimeValueTable({ mode, piaA, fraA, piaB, fraB, personA, personB, deathAgeA, deathAgeB, investRate, startAge, optimal }) {
+  if (mode === 'single') {
+    const endAge = deathAgeA
+    const years = []
+    for (let a = Math.ceil(startAge); a <= endAge; a++) years.push(a)
+    const claimAges = [62, 63, 64, 65, 66, 67, 68, 69, 70]
+    const rows = claimAges.map(y => {
+      const ca = { years: y, months: 0 }
+      const { monthly, rows: cumRows } = singleCumulative(piaA, fraA, ca, startAge, endAge, investRate)
+      const valueByAge = new Map(cumRows.map(r => [r.age, r.value]))
+      return { claimYear: y, monthly, valueByAge, final: cumRows[cumRows.length - 1]?.value ?? 0 }
+    })
+    const optimalYear = optimal?.claimAge?.years
+    return (
+      <div className="card">
+        <div className="card-title">Lifetime Value Breakdown — Through Age {endAge}</div>
+        <p style={{ fontSize: '0.82rem', color: '#4b5a7a', marginBottom: 10 }}>
+          Verifies the optimizer: each row shows cumulative lifetime $ at every age, by claim age.
+          {investRate > 0 && <> Balance compounds at <strong>{(investRate * 100).toFixed(1)}%</strong> per year.</>}
+        </p>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Claim Age</th>
+                <th>Monthly $</th>
+                {years.map(a => <th key={a}>{a}</th>)}
+                <th>Final</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.claimYear} className={r.claimYear === optimalYear ? 'fra-row' : ''}>
+                  <td><strong>{r.claimYear}</strong></td>
+                  <td>${Math.round(r.monthly).toLocaleString()}</td>
+                  {years.map(a => (
+                    <td key={a}>${Math.round(r.valueByAge.get(a) ?? 0).toLocaleString()}</td>
+                  ))}
+                  <td><strong>${Math.round(r.final).toLocaleString()}</strong></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    )
+  }
+
+  // Couple mode: 9 rows on the diagonal (both claim same age) + an Optimal row
+  const endAge = Math.max(deathAgeA, deathAgeB)
+  const years = []
+  for (let a = Math.ceil(startAge); a <= endAge; a++) years.push(a)
+  const paramsA = { birthYear: personA.birthYear, currentAge: personA.currentAge, pia: piaA }
+  const paramsB = { birthYear: personB.birthYear, currentAge: personB.currentAge, pia: piaB }
+
+  const diag = []
+  for (let y = 62; y <= 70; y++) {
+    const ca = { years: y, months: 0 }
+    const { monthlyA, monthlyB, rows: cumRows } = coupleCumulative({
+      paramsA, paramsB, claimAgeA: ca, claimAgeB: ca,
+      deathA: deathAgeA, deathB: deathAgeB, investRate, startAge,
+    })
+    const valueByAge = new Map(cumRows.map(r => [r.age, r.value]))
+    diag.push({
+      label: `Both @ ${y}`,
+      monthlyA, monthlyB,
+      valueByAge,
+      final: cumRows[cumRows.length - 1]?.value ?? 0,
+      isOptimal: false,
+    })
+  }
+
+  // Add optimal row if it differs from any diagonal entry
+  let optimalRow = null
+  if (optimal?.claimAgeA && optimal?.claimAgeB) {
+    const { monthlyA, monthlyB, rows: cumRows } = coupleCumulative({
+      paramsA, paramsB,
+      claimAgeA: optimal.claimAgeA, claimAgeB: optimal.claimAgeB,
+      deathA: deathAgeA, deathB: deathAgeB, investRate, startAge,
+    })
+    const valueByAge = new Map(cumRows.map(r => [r.age, r.value]))
+    optimalRow = {
+      label: `Optimal: A@${optimal.claimAgeA.years}, B@${optimal.claimAgeB.years}`,
+      monthlyA, monthlyB,
+      valueByAge,
+      final: cumRows[cumRows.length - 1]?.value ?? 0,
+      isOptimal: true,
+    }
+  }
+
+  const allRows = optimalRow ? [optimalRow, ...diag] : diag
+
+  return (
+    <div className="card">
+      <div className="card-title">Lifetime Value Breakdown — Through Age {endAge}</div>
+      <p style={{ fontSize: '0.82rem', color: '#4b5a7a', marginBottom: 10 }}>
+        Household cumulative $ year by year. Shows the optimal combo plus each "both claim at age N" scenario.
+        {investRate > 0 && <> Balance compounds at <strong>{(investRate * 100).toFixed(1)}%</strong> per year.</>}
+      </p>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Scenario</th>
+              <th>A $/mo</th>
+              <th>B $/mo</th>
+              {years.map(a => <th key={a}>{a}</th>)}
+              <th>Final</th>
+            </tr>
+          </thead>
+          <tbody>
+            {allRows.map((r, i) => (
+              <tr key={i} className={r.isOptimal ? 'fra-row' : ''}>
+                <td><strong>{r.label}</strong></td>
+                <td>${Math.round(r.monthlyA).toLocaleString()}</td>
+                <td>${Math.round(r.monthlyB).toLocaleString()}</td>
+                {years.map(a => (
+                  <td key={a}>${Math.round(r.valueByAge.get(a) ?? 0).toLocaleString()}</td>
+                ))}
+                <td><strong>${Math.round(r.final).toLocaleString()}</strong></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )
