@@ -19,17 +19,15 @@ function ageLabel(a) {
   return `${a.years}y${a.months}m`
 }
 
-// Single-person heatmap: claim age (X, 62-70) vs death age (Y).
+// Single-person heatmap: claim age (X) vs death age (Y).
 // Cell value = deterministic lifetime $ if you die at that age, with optional invest rate.
-function genSingleClaimDeathHeatmap(piaA, fraA, deathAges, investRate, startAge) {
+function genSingleClaimDeathHeatmap(piaA, fraA, claimAges, deathAges, investRate, startAge) {
   const data = []
-  const xValues = []
+  const xValues = [...claimAges]
   const yValues = [...deathAges]
 
-  for (let y = 62; y <= 70; y++) xValues.push(y)
-
   for (const da of deathAges) {
-    for (let years = 62; years <= 70; years++) {
+    for (const years of claimAges) {
       const claimAge = { years, months: 0 }
       const monthly = piaA * benefitFactor(claimAge, fraA)
       let balance = 0
@@ -150,6 +148,12 @@ export default function Module3({ sharedState }) {
   const [invest, setInvest] = useState(false)
   const [investRate, setInvestRate] = useState(0.02)
 
+  // Heatmap axis range controls
+  const [deathAgeMin, setDeathAgeMin] = useState(70)
+  const [deathAgeMax, setDeathAgeMax] = useState(100)
+  const [claimAgeMin, setClaimAgeMin] = useState(62)
+  const [claimAgeMax, setClaimAgeMax] = useState(70)
+
   const getDefaultAxes = (cm, m) => {
     if (m === 'single') return { x: 'claimAge', y: 'deathAge' }
     return { x: 'claimAgeA', y: 'claimAgeB' }
@@ -206,7 +210,18 @@ export default function Module3({ sharedState }) {
 
   // Heatmap data
   const startAge = Math.max(62, Math.ceil(personA.currentAge))
-  const deathAgeRange = Array.from({ length: 31 }, (_, i) => 70 + i) // 70-100
+  const safeDeathMin = Math.max(63, Math.min(deathAgeMin, deathAgeMax - 1))
+  const safeDeathMax = Math.max(safeDeathMin + 1, Math.min(deathAgeMax, 120))
+  const safeClaimMin = Math.max(62, Math.min(claimAgeMin, claimAgeMax - 1))
+  const safeClaimMax = Math.max(safeClaimMin + 1, Math.min(claimAgeMax, 70))
+  const deathAgeRange = Array.from(
+    { length: safeDeathMax - safeDeathMin + 1 },
+    (_, i) => safeDeathMin + i,
+  )
+  const claimAgeRange = Array.from(
+    { length: safeClaimMax - safeClaimMin + 1 },
+    (_, i) => safeClaimMin + i,
+  )
 
   // Life expectancy (probabilistic highlight target)
   const lifeExpA = useMemo(
@@ -221,7 +236,7 @@ export default function Module3({ sharedState }) {
   const heatmapData = useMemo(() => {
     if (mode === 'single') {
       // Always claim age × death age in both modes; rate is the user-toggled invest rate.
-      const raw = genSingleClaimDeathHeatmap(piaA, fraA, deathAgeRange, rate, startAge)
+      const raw = genSingleClaimDeathHeatmap(piaA, fraA, claimAgeRange, deathAgeRange, rate, startAge)
       const xIsClaimAge = heatXAxis === 'claimAge'
       if (xIsClaimAge) return raw
       return {
@@ -265,7 +280,7 @@ export default function Module3({ sharedState }) {
     const claimAgeAxis = heatXAxis.startsWith('claimAge') ? heatXAxis : heatYAxis
     const deathAgeAxis = heatXAxis.startsWith('deathAge') ? heatXAxis : heatYAxis
 
-    const claimAgeRange = Array.from({ length: 9 }, (_, i) => 62 + i) // 62-70
+
     const data = []
     const xSet = new Set()
     const ySet = new Set()
@@ -296,7 +311,7 @@ export default function Module3({ sharedState }) {
       xValues: [...xSet].sort((a, b) => a - b),
       yValues: [...ySet].sort((a, b) => a - b),
     }
-  }, [mode, calcMode, heatXAxis, heatYAxis, piaA, fraA, personA, piaB, fraB, personB, rate, result, deathAgeA, deathAgeB, startAge])
+  }, [mode, calcMode, heatXAxis, heatYAxis, piaA, fraA, personA, piaB, fraB, personB, rate, result, deathAgeA, deathAgeB, startAge, deathAgeRange, claimAgeRange])
 
   // Row weights (P(death@age)) for probabilistic mode when an axis is a death age
   const heatmapRowWeights = useMemo(() => {
@@ -482,6 +497,47 @@ export default function Module3({ sharedState }) {
                 </select>
               </div>
             </div>
+          )
+        })()}
+
+        {/* Axis range controls */}
+        {(() => {
+          const activeAxes = new Set([heatXAxis, heatYAxis])
+          const showDeath = activeAxes.has('deathAge') || activeAxes.has('deathAgeA') || activeAxes.has('deathAgeB')
+          const showClaim = activeAxes.has('claimAge') || activeAxes.has('claimAgeA') || activeAxes.has('claimAgeB')
+          if (!showDeath && !showClaim) return null
+          return (
+            <details style={{ marginBottom: 14 }}>
+              <summary style={{ cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, color: '#3b82f6', userSelect: 'none' }}>
+                Axis Ranges
+              </summary>
+              <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginTop: 10, padding: '12px 0' }}>
+                {showDeath && (
+                  <div>
+                    <div className="form-label" style={{ marginBottom: 6 }}>Death Age Range</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="number" className="form-input" style={{ width: 70 }} min={63} max={119}
+                        value={deathAgeMin} onChange={e => setDeathAgeMin(parseInt(e.target.value) || 70)} />
+                      <span style={{ color: '#4b5a7a' }}>to</span>
+                      <input type="number" className="form-input" style={{ width: 70 }} min={64} max={120}
+                        value={deathAgeMax} onChange={e => setDeathAgeMax(parseInt(e.target.value) || 100)} />
+                    </div>
+                  </div>
+                )}
+                {showClaim && (
+                  <div>
+                    <div className="form-label" style={{ marginBottom: 6 }}>Claim Age Range</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="number" className="form-input" style={{ width: 70 }} min={62} max={69}
+                        value={claimAgeMin} onChange={e => setClaimAgeMin(parseInt(e.target.value) || 62)} />
+                      <span style={{ color: '#4b5a7a' }}>to</span>
+                      <input type="number" className="form-input" style={{ width: 70 }} min={63} max={70}
+                        value={claimAgeMax} onChange={e => setClaimAgeMax(parseInt(e.target.value) || 70)} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </details>
           )
         })()}
 
