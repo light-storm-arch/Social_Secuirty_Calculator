@@ -195,15 +195,22 @@ export function optimizeCouple({ paramsA, paramsB, mode, investRate = 0 }) {
       const monthlyA_own = paramsA.pia * benefitFactor(claimAgeA, fraA)
       const monthlyB_own = paramsB.pia * benefitFactor(claimAgeB, fraB)
 
-      let monthlyA_spousal = monthlyA_own
-      let monthlyB_spousal = monthlyB_own
+      // Spousal top-up cannot be paid until the worker spouse has actually
+      // filed. The reduction factor on the top-up is based on the receiving
+      // spouse's age when the top-up actually starts — i.e. when both have
+      // filed (max of the two claim ages on the shared age axis).
+      const spousalStartMonths = Math.max(tmA, tmB)
+      const spousalStartAge = {
+        years: Math.floor(spousalStartMonths / 12),
+        months: spousalStartMonths % 12,
+      }
 
+      let topUpA = 0
+      let topUpB = 0
       if (higherEarnerIsA) {
-        const topUp = spousalTopUp(paramsA.pia, monthlyB_own, claimAgeB, fraB)
-        monthlyB_spousal = monthlyB_own + topUp
+        topUpB = spousalTopUp(paramsA.pia, monthlyB_own, spousalStartAge, fraB)
       } else {
-        const topUp = spousalTopUp(paramsB.pia, monthlyA_own, claimAgeA, fraA)
-        monthlyA_spousal = monthlyA_own + topUp
+        topUpA = spousalTopUp(paramsB.pia, monthlyA_own, spousalStartAge, fraA)
       }
 
       const survivorIfADies = survivorBenefit(monthlyB_own, monthlyA_own)
@@ -218,11 +225,13 @@ export function optimizeCouple({ paramsA, paramsB, mode, investRate = 0 }) {
           const ageMonths = age * 12
           const aStarted = ageMonths >= tmA
           const bStarted = ageMonths >= tmB
+          const bothFiled = aStarted && bStarted
 
           let income = 0
           if (aAlive && bAlive) {
-            income = (aStarted ? (higherEarnerIsA ? monthlyA_own : monthlyA_spousal) : 0) * 12
-                   + (bStarted ? (higherEarnerIsA ? monthlyB_spousal : monthlyB_own) : 0) * 12
+            const aPay = (aStarted ? monthlyA_own : 0) + (bothFiled ? topUpA : 0)
+            const bPay = (bStarted ? monthlyB_own : 0) + (bothFiled ? topUpB : 0)
+            income = (aPay + bPay) * 12
           } else if (aAlive && !bAlive) {
             income = (aStarted ? survivorIfBDies : 0) * 12
           } else if (!aAlive && bAlive) {
@@ -242,11 +251,11 @@ export function optimizeCouple({ paramsA, paramsB, mode, investRate = 0 }) {
           const ageMonths = age * 12
           const aStarted = ageMonths >= tmA
           const bStarted = ageMonths >= tmB
+          const bothFiled = aStarted && bStarted
 
-          const bothAliveIncome = (
-            (aStarted ? (higherEarnerIsA ? monthlyA_own : monthlyA_spousal) : 0)
-            + (bStarted ? (higherEarnerIsA ? monthlyB_spousal : monthlyB_own) : 0)
-          ) * 12
+          const aPay = (aStarted ? monthlyA_own : 0) + (bothFiled ? topUpA : 0)
+          const bPay = (bStarted ? monthlyB_own : 0) + (bothFiled ? topUpB : 0)
+          const bothAliveIncome = (aPay + bPay) * 12
           const onlyAIncome = (aStarted ? survivorIfBDies : 0) * 12
           const onlyBIncome = (bStarted ? survivorIfADies : 0) * 12
 
@@ -254,12 +263,17 @@ export function optimizeCouple({ paramsA, paramsB, mode, investRate = 0 }) {
                                + SA * (1 - SB) * onlyAIncome
                                + (1 - SA) * SB * onlyBIncome
 
-          // Compound forward: balance grows at investRate, receives expected income each year.
           value = value * (1 + investRate) + expectedIncome
         }
       }
 
-      const entry = { claimAgeA, claimAgeB, value, monthlyA: monthlyA_own, monthlyB: monthlyB_own }
+      // Reported monthly is the steady-state amount once both have filed,
+      // which is what the user actually receives long-term.
+      const entry = {
+        claimAgeA, claimAgeB, value,
+        monthlyA: monthlyA_own + topUpA,
+        monthlyB: monthlyB_own + topUpB,
+      }
       results.push(entry)
       if (value > bestValue) {
         bestValue = value

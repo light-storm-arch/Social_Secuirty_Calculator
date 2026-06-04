@@ -49,19 +49,22 @@ function coupleLifetimeValue({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, d
   const higherEarnerIsA = paramsA.pia >= paramsB.pia
   const monthlyA_own = paramsA.pia * benefitFactor(claimAgeA, fraA)
   const monthlyB_own = paramsB.pia * benefitFactor(claimAgeB, fraB)
-  let monthlyA_spousal = monthlyA_own
-  let monthlyB_spousal = monthlyB_own
+  const tmA = claimAgeA.years * 12 + claimAgeA.months
+  const tmB = claimAgeB.years * 12 + claimAgeB.months
+  const spousalStartMonths = Math.max(tmA, tmB)
+  const spousalStartAge = {
+    years: Math.floor(spousalStartMonths / 12),
+    months: spousalStartMonths % 12,
+  }
+  let topUpA = 0
+  let topUpB = 0
   if (higherEarnerIsA) {
-    const topUp = spousalTopUp(paramsA.pia, monthlyB_own, claimAgeB, fraB)
-    monthlyB_spousal = monthlyB_own + topUp
+    topUpB = spousalTopUp(paramsA.pia, monthlyB_own, spousalStartAge, fraB)
   } else {
-    const topUp = spousalTopUp(paramsB.pia, monthlyA_own, claimAgeA, fraA)
-    monthlyA_spousal = monthlyA_own + topUp
+    topUpA = spousalTopUp(paramsB.pia, monthlyA_own, spousalStartAge, fraA)
   }
   const survivorIfADies = survivorBenefit(monthlyB_own, monthlyA_own)
   const survivorIfBDies = survivorBenefit(monthlyA_own, monthlyB_own)
-  const tmA = claimAgeA.years * 12 + claimAgeA.months
-  const tmB = claimAgeB.years * 12 + claimAgeB.months
   const end = Math.max(deathA, deathB)
   let val = 0
   for (let age = Math.ceil(startAge); age <= end; age++) {
@@ -70,10 +73,12 @@ function coupleLifetimeValue({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, d
     const ageMonths = age * 12
     const aStarted = ageMonths >= tmA
     const bStarted = ageMonths >= tmB
+    const bothFiled = aStarted && bStarted
     let income = 0
     if (aAlive && bAlive) {
-      income = (aStarted ? (higherEarnerIsA ? monthlyA_own : monthlyA_spousal) : 0) * 12
-             + (bStarted ? (higherEarnerIsA ? monthlyB_spousal : monthlyB_own) : 0) * 12
+      const aPay = (aStarted ? monthlyA_own : 0) + (bothFiled ? topUpA : 0)
+      const bPay = (bStarted ? monthlyB_own : 0) + (bothFiled ? topUpB : 0)
+      income = (aPay + bPay) * 12
     } else if (aAlive) {
       income = (aStarted ? survivorIfBDies : 0) * 12
     } else if (bAlive) {
@@ -105,17 +110,22 @@ function coupleCumulative({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, deat
   const higherEarnerIsA = paramsA.pia >= paramsB.pia
   const monthlyA_own = paramsA.pia * benefitFactor(claimAgeA, fraA)
   const monthlyB_own = paramsB.pia * benefitFactor(claimAgeB, fraB)
-  let monthlyA_spousal = monthlyA_own
-  let monthlyB_spousal = monthlyB_own
+  const tmA = claimAgeA.years * 12 + claimAgeA.months
+  const tmB = claimAgeB.years * 12 + claimAgeB.months
+  const spousalStartMonths = Math.max(tmA, tmB)
+  const spousalStartAge = {
+    years: Math.floor(spousalStartMonths / 12),
+    months: spousalStartMonths % 12,
+  }
+  let topUpA = 0
+  let topUpB = 0
   if (higherEarnerIsA) {
-    monthlyB_spousal = monthlyB_own + spousalTopUp(paramsA.pia, monthlyB_own, claimAgeB, fraB)
+    topUpB = spousalTopUp(paramsA.pia, monthlyB_own, spousalStartAge, fraB)
   } else {
-    monthlyA_spousal = monthlyA_own + spousalTopUp(paramsB.pia, monthlyA_own, claimAgeA, fraA)
+    topUpA = spousalTopUp(paramsB.pia, monthlyA_own, spousalStartAge, fraA)
   }
   const survivorIfADies = survivorBenefit(monthlyB_own, monthlyA_own)
   const survivorIfBDies = survivorBenefit(monthlyA_own, monthlyB_own)
-  const tmA = claimAgeA.years * 12 + claimAgeA.months
-  const tmB = claimAgeB.years * 12 + claimAgeB.months
   const end = Math.max(deathA, deathB)
   const rows = []
   let balance = 0
@@ -125,10 +135,12 @@ function coupleCumulative({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, deat
     const ageMonths = age * 12
     const aStarted = ageMonths >= tmA
     const bStarted = ageMonths >= tmB
+    const bothFiled = aStarted && bStarted
     let income = 0
     if (aAlive && bAlive) {
-      income = (aStarted ? (higherEarnerIsA ? monthlyA_own : monthlyA_spousal) : 0) * 12
-             + (bStarted ? (higherEarnerIsA ? monthlyB_spousal : monthlyB_own) : 0) * 12
+      const aPay = (aStarted ? monthlyA_own : 0) + (bothFiled ? topUpA : 0)
+      const bPay = (bStarted ? monthlyB_own : 0) + (bothFiled ? topUpB : 0)
+      income = (aPay + bPay) * 12
     } else if (aAlive) {
       income = (aStarted ? survivorIfBDies : 0) * 12
     } else if (bAlive) {
@@ -137,7 +149,11 @@ function coupleCumulative({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, deat
     balance = balance * (1 + investRate) + income
     rows.push({ age, value: balance })
   }
-  return { monthlyA: monthlyA_own, monthlyB: monthlyB_own, rows }
+  return {
+    monthlyA: monthlyA_own + topUpA,
+    monthlyB: monthlyB_own + topUpB,
+    rows,
+  }
 }
 
 export default function Module3({ sharedState }) {
