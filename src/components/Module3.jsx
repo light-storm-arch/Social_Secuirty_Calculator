@@ -457,6 +457,34 @@ export default function Module3({ sharedState }) {
                 weighted by each year's joint survival probabilities.
               </div>
             )}
+            <details style={{ marginTop: 8, fontSize: '0.8rem', color: '#3b5dad' }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+                Why probabilistic ≠ deterministic at life expectancy?
+              </summary>
+              <div style={{ marginTop: 6, lineHeight: 1.5 }}>
+                Setting the deterministic death age to life expectancy gives the value{' '}
+                <em>if you die at exactly that age</em>. Probabilistic gives the{' '}
+                <em>expected</em> value averaged across <em>every</em> possible death age,
+                weighted by SSA probabilities. The two answers differ because the payout
+                function is nonlinear (zero before claim age, linear after), and{' '}
+                {mode === 'couple' ? (
+                  <>
+                    in couples the deterministic case implicitly assumes both spouses die
+                    at the same time — so it spends 100% of the timeline in the
+                    spousal-top-up regime and 0% in the survivor regime. Probabilistic
+                    correctly splits time between them. Gaps of 10–20% are normal,
+                    especially when one spouse has no own record.
+                  </>
+                ) : (
+                  <>
+                    probabilistic also captures the right tail (people living to 90+) and
+                    the small left tail (dying before claim age). For a single person with
+                    no investment, the two should be within a few percent; investment
+                    compounding widens the gap.
+                  </>
+                )}
+              </div>
+            </details>
           </div>
         )}
 
