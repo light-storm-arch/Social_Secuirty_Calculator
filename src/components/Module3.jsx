@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react'
-import { getFRA, backOutPIA, benefitFactor, optimizeSingle, optimizeCouple, spousalTopUp, survivorBenefit } from '../engine/ssEngine.js'
+import { getFRA, backOutPIA, benefitFactor, optimizeSingle, optimizeCouple, spousalTopUp, survivorAmountFromWorker, survivorReductionFactor } from '../engine/ssEngine.js'
 import { lifeExpectancy, pDeathAtAge } from '../engine/mortalityTable.js'
 import SensitivityHeatmap from './SensitivityHeatmap.jsx'
 
@@ -49,19 +49,30 @@ function coupleLifetimeValue({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, d
   const higherEarnerIsA = paramsA.pia >= paramsB.pia
   const monthlyA_own = paramsA.pia * benefitFactor(claimAgeA, fraA)
   const monthlyB_own = paramsB.pia * benefitFactor(claimAgeB, fraB)
-  let monthlyA_spousal = monthlyA_own
-  let monthlyB_spousal = monthlyB_own
-  if (higherEarnerIsA) {
-    const topUp = spousalTopUp(paramsA.pia, monthlyB_own, claimAgeB, fraB)
-    monthlyB_spousal = monthlyB_own + topUp
-  } else {
-    const topUp = spousalTopUp(paramsB.pia, monthlyA_own, claimAgeA, fraA)
-    monthlyA_spousal = monthlyA_own + topUp
-  }
-  const survivorIfADies = survivorBenefit(monthlyB_own, monthlyA_own)
-  const survivorIfBDies = survivorBenefit(monthlyA_own, monthlyB_own)
   const tmA = claimAgeA.years * 12 + claimAgeA.months
   const tmB = claimAgeB.years * 12 + claimAgeB.months
+  const spousalStartMonths = Math.max(tmA, tmB)
+  const spousalStartAge = {
+    years: Math.floor(spousalStartMonths / 12),
+    months: spousalStartMonths % 12,
+  }
+  let topUpA = 0
+  let topUpB = 0
+  if (higherEarnerIsA) {
+    topUpB = spousalTopUp(paramsA.pia, monthlyB_own, spousalStartAge, fraB)
+  } else {
+    topUpA = spousalTopUp(paramsB.pia, monthlyA_own, spousalStartAge, fraA)
+  }
+  const survAmtFromA = survivorAmountFromWorker(paramsA, claimAgeA, deathA)
+  const survAmtFromB = survivorAmountFromWorker(paramsB, claimAgeB, deathB)
+  const bSurvStartAge = Math.max(60, deathA)
+  const aSurvStartAge = Math.max(60, deathB)
+  const survPayToB = survAmtFromA * survivorReductionFactor(
+    { years: bSurvStartAge, months: 0 }, fraB,
+  )
+  const survPayToA = survAmtFromB * survivorReductionFactor(
+    { years: aSurvStartAge, months: 0 }, fraA,
+  )
   const end = Math.max(deathA, deathB)
   let val = 0
   for (let age = Math.ceil(startAge); age <= end; age++) {
@@ -70,14 +81,20 @@ function coupleLifetimeValue({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, d
     const ageMonths = age * 12
     const aStarted = ageMonths >= tmA
     const bStarted = ageMonths >= tmB
+    const bothFiled = aStarted && bStarted
     let income = 0
     if (aAlive && bAlive) {
-      income = (aStarted ? (higherEarnerIsA ? monthlyA_own : monthlyA_spousal) : 0) * 12
-             + (bStarted ? (higherEarnerIsA ? monthlyB_spousal : monthlyB_own) : 0) * 12
+      const aPay = (aStarted ? monthlyA_own : 0) + (bothFiled ? topUpA : 0)
+      const bPay = (bStarted ? monthlyB_own : 0) + (bothFiled ? topUpB : 0)
+      income = (aPay + bPay) * 12
     } else if (aAlive) {
-      income = (aStarted ? survivorIfBDies : 0) * 12
+      const ownPay = aStarted ? monthlyA_own : 0
+      const survPay = age >= aSurvStartAge ? survPayToA : 0
+      income = Math.max(ownPay, survPay) * 12
     } else if (bAlive) {
-      income = (bStarted ? survivorIfADies : 0) * 12
+      const ownPay = bStarted ? monthlyB_own : 0
+      const survPay = age >= bSurvStartAge ? survPayToB : 0
+      income = Math.max(ownPay, survPay) * 12
     }
     val = val * (1 + investRate) + income
   }
@@ -105,17 +122,30 @@ function coupleCumulative({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, deat
   const higherEarnerIsA = paramsA.pia >= paramsB.pia
   const monthlyA_own = paramsA.pia * benefitFactor(claimAgeA, fraA)
   const monthlyB_own = paramsB.pia * benefitFactor(claimAgeB, fraB)
-  let monthlyA_spousal = monthlyA_own
-  let monthlyB_spousal = monthlyB_own
-  if (higherEarnerIsA) {
-    monthlyB_spousal = monthlyB_own + spousalTopUp(paramsA.pia, monthlyB_own, claimAgeB, fraB)
-  } else {
-    monthlyA_spousal = monthlyA_own + spousalTopUp(paramsB.pia, monthlyA_own, claimAgeA, fraA)
-  }
-  const survivorIfADies = survivorBenefit(monthlyB_own, monthlyA_own)
-  const survivorIfBDies = survivorBenefit(monthlyA_own, monthlyB_own)
   const tmA = claimAgeA.years * 12 + claimAgeA.months
   const tmB = claimAgeB.years * 12 + claimAgeB.months
+  const spousalStartMonths = Math.max(tmA, tmB)
+  const spousalStartAge = {
+    years: Math.floor(spousalStartMonths / 12),
+    months: spousalStartMonths % 12,
+  }
+  let topUpA = 0
+  let topUpB = 0
+  if (higherEarnerIsA) {
+    topUpB = spousalTopUp(paramsA.pia, monthlyB_own, spousalStartAge, fraB)
+  } else {
+    topUpA = spousalTopUp(paramsB.pia, monthlyA_own, spousalStartAge, fraA)
+  }
+  const survAmtFromA = survivorAmountFromWorker(paramsA, claimAgeA, deathA)
+  const survAmtFromB = survivorAmountFromWorker(paramsB, claimAgeB, deathB)
+  const bSurvStartAge = Math.max(60, deathA)
+  const aSurvStartAge = Math.max(60, deathB)
+  const survPayToB = survAmtFromA * survivorReductionFactor(
+    { years: bSurvStartAge, months: 0 }, fraB,
+  )
+  const survPayToA = survAmtFromB * survivorReductionFactor(
+    { years: aSurvStartAge, months: 0 }, fraA,
+  )
   const end = Math.max(deathA, deathB)
   const rows = []
   let balance = 0
@@ -125,19 +155,29 @@ function coupleCumulative({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, deat
     const ageMonths = age * 12
     const aStarted = ageMonths >= tmA
     const bStarted = ageMonths >= tmB
+    const bothFiled = aStarted && bStarted
     let income = 0
     if (aAlive && bAlive) {
-      income = (aStarted ? (higherEarnerIsA ? monthlyA_own : monthlyA_spousal) : 0) * 12
-             + (bStarted ? (higherEarnerIsA ? monthlyB_spousal : monthlyB_own) : 0) * 12
+      const aPay = (aStarted ? monthlyA_own : 0) + (bothFiled ? topUpA : 0)
+      const bPay = (bStarted ? monthlyB_own : 0) + (bothFiled ? topUpB : 0)
+      income = (aPay + bPay) * 12
     } else if (aAlive) {
-      income = (aStarted ? survivorIfBDies : 0) * 12
+      const ownPay = aStarted ? monthlyA_own : 0
+      const survPay = age >= aSurvStartAge ? survPayToA : 0
+      income = Math.max(ownPay, survPay) * 12
     } else if (bAlive) {
-      income = (bStarted ? survivorIfADies : 0) * 12
+      const ownPay = bStarted ? monthlyB_own : 0
+      const survPay = age >= bSurvStartAge ? survPayToB : 0
+      income = Math.max(ownPay, survPay) * 12
     }
     balance = balance * (1 + investRate) + income
     rows.push({ age, value: balance })
   }
-  return { monthlyA: monthlyA_own, monthlyB: monthlyB_own, rows }
+  return {
+    monthlyA: monthlyA_own + topUpA,
+    monthlyB: monthlyB_own + topUpB,
+    rows,
+  }
 }
 
 export default function Module3({ sharedState }) {
@@ -393,10 +433,30 @@ export default function Module3({ sharedState }) {
           </div>
         ) : (
           <div style={{ marginTop: 14, padding: '12px 16px', background: '#eff6ff', borderRadius: 8, fontSize: '0.85rem', color: '#1d4ed8' }}>
-            Using SSA Period Life Table 2022 (2025 Trustees Report) for survival probabilities.{' '}
-            <a href="https://www.ssa.gov/oact/STATS/table4c6.html" target="_blank" rel="noreferrer" style={{ color: '#1d4ed8', fontWeight: 600 }}>
-              Source
-            </a>
+            <div>
+              Using SSA Period Life Table 2022 (2025 Trustees Report) for survival probabilities.{' '}
+              <a href="https://www.ssa.gov/oact/STATS/table4c6.html" target="_blank" rel="noreferrer" style={{ color: '#1d4ed8', fontWeight: 600 }}>
+                Source
+              </a>
+            </div>
+            <div style={{ marginTop: 8, display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+              <span>
+                {mode === 'couple' ? 'Person A' : 'Your'} life expectancy:{' '}
+                <strong>{lifeExpA.toFixed(1)}</strong>
+              </span>
+              {mode === 'couple' && lifeExpB != null && (
+                <span>
+                  Person B life expectancy: <strong>{lifeExpB.toFixed(1)}</strong>
+                </span>
+              )}
+            </div>
+            {mode === 'couple' && (
+              <div style={{ marginTop: 6, fontSize: '0.8rem', color: '#3b5dad' }}>
+                Couple optimization folds in spousal top-up (up to 50% of higher earner's PIA)
+                and survivor benefits (survivor receives the larger of own or deceased's benefit),
+                weighted by each year's joint survival probabilities.
+              </div>
+            )}
           </div>
         )}
 
