@@ -120,6 +120,11 @@ export default function Module2({ sharedState }) {
   // Precompute per-strategy monthly amounts and cumulative rows.
   const computed = useMemo(() => {
     if (strategies.length === 0) return null
+    // Bail out if the strategy shape doesn't match the current mode — this
+    // happens for one render after toggling single ↔ couple, before the
+    // reset effect fires.
+    if (mode === 'couple' && strategies.some(s => !s.claimAgeA || !s.claimAgeB)) return null
+    if (mode === 'single' && strategies.some(s => !s.claimAge)) return null
     if (mode === 'couple') {
       const paramsA = { birthYear: personA.birthYear, pia: piaA }
       const paramsB = { birthYear: personB.birthYear, pia: piaB }
@@ -197,7 +202,12 @@ export default function Module2({ sharedState }) {
         <div className="card-title">
           Strategies {mode === 'couple' && <span style={{ fontSize: '0.78rem', color: '#6b7a9a', fontWeight: 400 }}>— each strategy has separate claim ages for A and B</span>}
         </div>
-        {strategies.map((s, i) => (
+        {strategies.map((s, i) => {
+          // Skip rendering rows that don't match the current mode — this
+          // happens for one render after toggling modes.
+          if (mode === 'couple' && (!s.claimAgeA || !s.claimAgeB)) return null
+          if (mode === 'single' && !s.claimAge) return null
+          return (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap', paddingBottom: 8, borderBottom: i < strategies.length - 1 ? '1px solid #eef1f8' : 'none' }}>
             <div style={{ width: 14, height: 14, borderRadius: '50%', background: COLORS[i % COLORS.length], flexShrink: 0 }} />
             <input
@@ -250,7 +260,8 @@ export default function Module2({ sharedState }) {
               <button className="btn btn-danger btn-sm" onClick={() => removeStrategy(i)}>Remove</button>
             )}
           </div>
-        ))}
+          )
+        })}
         <button className="btn btn-secondary btn-sm" onClick={addStrategy}>+ Add Strategy</button>
       </div>
 
