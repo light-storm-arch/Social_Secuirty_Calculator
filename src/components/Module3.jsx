@@ -208,8 +208,10 @@ export default function Module3({ sharedState }) {
     }
   }, [mode, personA, personB, piaA, piaB, calcMode, deathAgeA, deathAgeB, rate])
 
-  // Heatmap data
-  const startAge = Math.max(62, Math.ceil(personA.currentAge))
+  // Heatmap data. Couples must use max-of-both ages to match optimizeCouple.
+  const startAge = mode === 'couple'
+    ? Math.max(62, Math.ceil(personA.currentAge), Math.ceil(personB?.currentAge ?? 0))
+    : Math.max(62, Math.ceil(personA.currentAge))
   const safeDeathMin = Math.max(63, Math.min(deathAgeMin, deathAgeMax - 1))
   const safeDeathMax = Math.max(safeDeathMin + 1, Math.min(deathAgeMax, 120))
   const safeClaimMin = Math.max(62, Math.min(claimAgeMin, claimAgeMax - 1))

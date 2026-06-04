@@ -197,20 +197,37 @@ export default function SensitivityHeatmap({ data, xLabel, yLabel, xValues, yVal
         </div>
       )}
 
-      {/* Color scale legend */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: '0.78rem', color: '#4b5a7a' }}>
-        <span>Low</span>
-        <svg width={120} height={12}>
-          <defs>
-            <linearGradient id="heatLegend" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor={valueToColor(minVal, minVal, maxVal)} />
-              <stop offset="50%" stopColor={valueToColor((minVal + maxVal) / 2, minVal, maxVal)} />
-              <stop offset="100%" stopColor={valueToColor(maxVal, minVal, maxVal)} />
-            </linearGradient>
-          </defs>
-          <rect width={120} height={12} fill="url(#heatLegend)" rx={4} />
-        </svg>
-        <span>High</span>
+      {/* Legend */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginTop: 8, fontSize: '0.78rem', color: '#4b5a7a', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span><strong>Lifetime $:</strong> Low</span>
+          <svg width={120} height={12}>
+            <defs>
+              <linearGradient id="heatLegend" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stopColor={valueToColor(minVal, minVal, maxVal)} />
+                <stop offset="50%" stopColor={valueToColor((minVal + maxVal) / 2, minVal, maxVal)} />
+                <stop offset="100%" stopColor={valueToColor(maxVal, minVal, maxVal)} />
+              </linearGradient>
+            </defs>
+            <rect width={120} height={12} fill="url(#heatLegend)" rx={4} />
+          </svg>
+          <span>High</span>
+        </div>
+        {weightOpacity && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span><strong>{rowWeightLabel ?? 'Probability'}:</strong> Low</span>
+            <svg width={120} height={12}>
+              <defs>
+                <linearGradient id="opacityLegend" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#1a2744" stopOpacity={0.18} />
+                  <stop offset="100%" stopColor="#1a2744" stopOpacity={1} />
+                </linearGradient>
+              </defs>
+              <rect width={120} height={12} fill="url(#opacityLegend)" rx={4} />
+            </svg>
+            <span>High</span>
+          </div>
+        )}
       </div>
     </div>
   )
