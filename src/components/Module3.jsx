@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react'
-import { getFRA, backOutPIA, benefitFactor, optimizeSingle, optimizeCouple, spousalTopUp, survivorAmountFromWorker } from '../engine/ssEngine.js'
+import { getFRA, backOutPIA, benefitFactor, optimizeSingle, optimizeCouple, spousalTopUp, survivorAmountFromWorker, survivorReductionFactor } from '../engine/ssEngine.js'
 import { lifeExpectancy, pDeathAtAge } from '../engine/mortalityTable.js'
 import SensitivityHeatmap from './SensitivityHeatmap.jsx'
 
@@ -63,13 +63,15 @@ function coupleLifetimeValue({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, d
   } else {
     topUpA = spousalTopUp(paramsB.pia, monthlyA_own, spousalStartAge, fraA)
   }
-  const survivorIfADies = Math.max(
-    monthlyB_own,
-    survivorAmountFromWorker(paramsA, claimAgeA, deathA),
+  const survAmtFromA = survivorAmountFromWorker(paramsA, claimAgeA, deathA)
+  const survAmtFromB = survivorAmountFromWorker(paramsB, claimAgeB, deathB)
+  const bSurvStartAge = Math.max(60, deathA)
+  const aSurvStartAge = Math.max(60, deathB)
+  const survPayToB = survAmtFromA * survivorReductionFactor(
+    { years: bSurvStartAge, months: 0 }, fraB,
   )
-  const survivorIfBDies = Math.max(
-    monthlyA_own,
-    survivorAmountFromWorker(paramsB, claimAgeB, deathB),
+  const survPayToA = survAmtFromB * survivorReductionFactor(
+    { years: aSurvStartAge, months: 0 }, fraA,
   )
   const end = Math.max(deathA, deathB)
   let val = 0
@@ -86,9 +88,13 @@ function coupleLifetimeValue({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, d
       const bPay = (bStarted ? monthlyB_own : 0) + (bothFiled ? topUpB : 0)
       income = (aPay + bPay) * 12
     } else if (aAlive) {
-      income = (aStarted ? survivorIfBDies : 0) * 12
+      const ownPay = aStarted ? monthlyA_own : 0
+      const survPay = age >= aSurvStartAge ? survPayToA : 0
+      income = Math.max(ownPay, survPay) * 12
     } else if (bAlive) {
-      income = (bStarted ? survivorIfADies : 0) * 12
+      const ownPay = bStarted ? monthlyB_own : 0
+      const survPay = age >= bSurvStartAge ? survPayToB : 0
+      income = Math.max(ownPay, survPay) * 12
     }
     val = val * (1 + investRate) + income
   }
@@ -130,13 +136,15 @@ function coupleCumulative({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, deat
   } else {
     topUpA = spousalTopUp(paramsB.pia, monthlyA_own, spousalStartAge, fraA)
   }
-  const survivorIfADies = Math.max(
-    monthlyB_own,
-    survivorAmountFromWorker(paramsA, claimAgeA, deathA),
+  const survAmtFromA = survivorAmountFromWorker(paramsA, claimAgeA, deathA)
+  const survAmtFromB = survivorAmountFromWorker(paramsB, claimAgeB, deathB)
+  const bSurvStartAge = Math.max(60, deathA)
+  const aSurvStartAge = Math.max(60, deathB)
+  const survPayToB = survAmtFromA * survivorReductionFactor(
+    { years: bSurvStartAge, months: 0 }, fraB,
   )
-  const survivorIfBDies = Math.max(
-    monthlyA_own,
-    survivorAmountFromWorker(paramsB, claimAgeB, deathB),
+  const survPayToA = survAmtFromB * survivorReductionFactor(
+    { years: aSurvStartAge, months: 0 }, fraA,
   )
   const end = Math.max(deathA, deathB)
   const rows = []
@@ -154,9 +162,13 @@ function coupleCumulative({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, deat
       const bPay = (bStarted ? monthlyB_own : 0) + (bothFiled ? topUpB : 0)
       income = (aPay + bPay) * 12
     } else if (aAlive) {
-      income = (aStarted ? survivorIfBDies : 0) * 12
+      const ownPay = aStarted ? monthlyA_own : 0
+      const survPay = age >= aSurvStartAge ? survPayToA : 0
+      income = Math.max(ownPay, survPay) * 12
     } else if (bAlive) {
-      income = (bStarted ? survivorIfADies : 0) * 12
+      const ownPay = bStarted ? monthlyB_own : 0
+      const survPay = age >= bSurvStartAge ? survPayToB : 0
+      income = Math.max(ownPay, survPay) * 12
     }
     balance = balance * (1 + investRate) + income
     rows.push({ age, value: balance })
