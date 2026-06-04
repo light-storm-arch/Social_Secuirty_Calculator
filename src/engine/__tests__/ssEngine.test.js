@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { getFRA, benefitFactor, backOutPIA, benefitTable, spousalTopUp, survivorBenefit, optimizeCouple } from '../ssEngine.js'
+import {
+  getFRA, benefitFactor, backOutPIA, benefitTable, spousalTopUp,
+  survivorBenefit, survivorAmountFromWorker, optimizeCouple,
+} from '../ssEngine.js'
 
 describe('getFRA', () => {
   it('returns 66y0m for 1943-1954', () => {
@@ -72,6 +75,43 @@ describe('survivorBenefit', () => {
   })
 })
 
+describe('survivorAmountFromWorker', () => {
+  // Worker: born 1960 (FRA 67), PIA = $2000.
+  const worker = { birthYear: 1960, pia: 2000 }
+
+  it('died before filing, before FRA → 100% of PIA', () => {
+    const claim = { years: 70, months: 0 }
+    expect(survivorAmountFromWorker(worker, claim, 65)).toBeCloseTo(2000, 2)
+  })
+
+  it('died before filing, after FRA → PIA + DRCs up to death age', () => {
+    // Planned claim at 70 but died at 69 → DRCs from 67 to 69 = 24 months × 2/3% = 16% → 116%
+    const claim = { years: 70, months: 0 }
+    expect(survivorAmountFromWorker(worker, claim, 69)).toBeCloseTo(2000 * 1.16, 2)
+  })
+
+  it('died before filing, past 70 → DRCs capped at age 70', () => {
+    const claim = { years: 70, months: 0 }
+    expect(survivorAmountFromWorker(worker, claim, 75)).toBeCloseTo(2000 * 1.24, 2)
+  })
+
+  it('died after filing at FRA → 100% of PIA (RIB-LIM floor irrelevant)', () => {
+    const claim = { years: 67, months: 0 }
+    expect(survivorAmountFromWorker(worker, claim, 75)).toBeCloseTo(2000, 2)
+  })
+
+  it('died after filing at 62 (reduced) → max(82.5% PIA, reduced) = 82.5% floor', () => {
+    // 70% of PIA = $1400 < 82.5% = $1650 → survivor gets $1650
+    const claim = { years: 62, months: 0 }
+    expect(survivorAmountFromWorker(worker, claim, 75)).toBeCloseTo(2000 * 0.825, 2)
+  })
+
+  it('died after filing at 70 → 124% of PIA passes through', () => {
+    const claim = { years: 70, months: 0 }
+    expect(survivorAmountFromWorker(worker, claim, 80)).toBeCloseTo(2000 * 1.24, 2)
+  })
+})
+
 describe('optimizeCouple — spousal gating', () => {
   // Both born 1960 (FRA 67), male, currentAge 62, A has PIA $2000, B has $0.
   // B is a spousal-only claimant, so cannot collect anything until A files.
@@ -128,6 +168,51 @@ describe('optimizeCouple — spousal gating', () => {
     )
     // B's monthly should be $1000 (unreduced spousal), not the reduced amount.
     expect(e.monthlyB).toBeCloseTo(1000, 2)
+  })
+
+  it('A delays to 70 but dies at 65 → B gets PIA-based survivor, not 124%', () => {
+    // A planned to claim at 70, died at 65 (pre-FRA), B claims at 67.
+    // Survivor amount from A = 100% PIA = $2000 (not $2480).
+    // B's own = $0. So B receives $2000/mo from when B has filed.
+    // B was filed at 67. A died at 65 (before A filed). So:
+    //   ages 67–84 (B claim → B death): B receives max(0, $2000) = $2000/mo
+    //   = $2000 × 12 × (84 - 67 + 1) = $432,000
+    const r = optimizeCouple({
+      paramsA: { ...baseA, deathAge: 65 },
+      paramsB: { ...baseB, deathAge: 84 },
+      mode: 'deterministic',
+      investRate: 0,
+    })
+    const e = r.heatmapMatrix.find(x =>
+      x.claimAgeA.years === 70 && x.claimAgeA.months === 0 &&
+      x.claimAgeB.years === 67 && x.claimAgeB.months === 0
+    )
+    expect(e.value).toBeCloseTo(2000 * 12 * 18, 0)
+  })
+
+  it('A claims at 62 (reduced) then dies → B gets 82.5% PIA survivor floor', () => {
+    // A claims at 62 → reduced own benefit of $1400. A dies at 75.
+    // Survivor amount from A = max(0.825 × $2000, $1400) = $1650 (RIB-LIM floor).
+    // B claims at 67. Between 67 and 75: both alive, A gets $1400, B gets
+    // spousal top-up unreduced (start age 67 = FRA) so $1000 → household $2400/mo.
+    // After A dies at 75 (ages 76-85): B alone, receives $1650/mo.
+    const r = optimizeCouple({
+      paramsA: { ...baseA, deathAge: 75 },
+      paramsB: { ...baseB, deathAge: 85 },
+      mode: 'deterministic',
+      investRate: 0,
+    })
+    const e = r.heatmapMatrix.find(x =>
+      x.claimAgeA.years === 62 && x.claimAgeA.months === 0 &&
+      x.claimAgeB.years === 67 && x.claimAgeB.months === 0
+    )
+    // Ages 62-66: A has filed, B hasn't. A alone gets $1400 × 12 × 5 = $84,000
+    // Ages 67-75: both filed. A = $1400, B own = $0, top-up = $1000 (50% PIA).
+    //   Household = $2400 × 12 × 9 = $259,200
+    // Ages 76-85: A dead, B alone gets max($0, $1650) = $1650/mo
+    //   = $1650 × 12 × 10 = $198,000
+    const expected = 84000 + 259200 + 198000
+    expect(e.value).toBeCloseTo(expected, 0)
   })
 
   it('when B has $0 PIA, B claim age has no effect on lifetime value', () => {

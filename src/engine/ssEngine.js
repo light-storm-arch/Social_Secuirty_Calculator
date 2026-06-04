@@ -90,6 +90,37 @@ export function survivorBenefit(survivorOwnMonthly, deceasedMonthlyAtDeath) {
   return Math.max(survivorOwnMonthly, deceasedMonthlyAtDeath)
 }
 
+// Amount available to the surviving spouse FROM the deceased worker's record,
+// before taking max with the survivor's own benefit.
+//
+// SSA rules:
+//   • Worker died BEFORE filing, BEFORE FRA → survivor gets 100% of PIA.
+//   • Worker died BEFORE filing, AFTER FRA → PIA + delayed credits earned
+//     up to min(death age, 70).
+//   • Worker died AFTER filing → RIB-LIM: max(82.5% of PIA, worker's actual
+//     benefit at death). Delayed credits the worker actually earned do flow
+//     through to the survivor; reductions for early claim are partly
+//     protected by the 82.5% floor.
+export function survivorAmountFromWorker(workerParams, workerClaimAge, workerDeathAge) {
+  const fra = getFRA(workerParams.birthYear)
+  const claimMonths = workerClaimAge.years * 12 + workerClaimAge.months
+  const fraMonths = fra.years * 12 + fra.months
+  const deathMonths = Math.floor(workerDeathAge) * 12
+
+  if (deathMonths < claimMonths) {
+    // Died before filing
+    if (deathMonths < fraMonths) {
+      return workerParams.pia
+    }
+    const drcMonths = Math.min(deathMonths, 70 * 12)
+    const drcAge = { years: Math.floor(drcMonths / 12), months: drcMonths % 12 }
+    return workerParams.pia * benefitFactor(drcAge, fra)
+  }
+  // Died after filing
+  const actual = workerParams.pia * benefitFactor(workerClaimAge, fra)
+  return Math.max(0.825 * workerParams.pia, actual)
+}
+
 export function cumulativeByAge(monthlyBenefit, claimAge, startAge, endAge, investRate) {
   const claimTotalMonths = claimAge.years * 12 + claimAge.months
   const rows = []
@@ -213,15 +244,24 @@ export function optimizeCouple({ paramsA, paramsB, mode, investRate = 0 }) {
         topUpA = spousalTopUp(paramsB.pia, monthlyA_own, spousalStartAge, fraA)
       }
 
-      const survivorIfADies = survivorBenefit(monthlyB_own, monthlyA_own)
-      const survivorIfBDies = survivorBenefit(monthlyA_own, monthlyB_own)
-
       let value = 0
       if (mode === 'deterministic') {
-        const endAge = Math.max(paramsA.deathAge ?? 85, paramsB.deathAge ?? 85)
+        const aDeathAge = paramsA.deathAge ?? 85
+        const bDeathAge = paramsB.deathAge ?? 85
+        // Survivor amount depends on the deceased worker's status at death
+        // (pre/post filing, pre/post FRA, delayed credits actually earned).
+        const survivorIfADies = Math.max(
+          monthlyB_own,
+          survivorAmountFromWorker(paramsA, claimAgeA, aDeathAge),
+        )
+        const survivorIfBDies = Math.max(
+          monthlyA_own,
+          survivorAmountFromWorker(paramsB, claimAgeB, bDeathAge),
+        )
+        const endAge = Math.max(aDeathAge, bDeathAge)
         for (let age = Math.ceil(startAge); age <= endAge; age++) {
-          const aAlive = age <= (paramsA.deathAge ?? 85)
-          const bAlive = age <= (paramsB.deathAge ?? 85)
+          const aAlive = age <= aDeathAge
+          const bAlive = age <= bDeathAge
           const ageMonths = age * 12
           const aStarted = ageMonths >= tmA
           const bStarted = ageMonths >= tmB
@@ -245,23 +285,56 @@ export function optimizeCouple({ paramsA, paramsB, mode, investRate = 0 }) {
           }
         }
       } else {
-        for (let age = Math.ceil(startAge); age <= maxAge; age++) {
-          const SA = survivalProb(paramsA.sex, paramsA.currentAge, age)
-          const SB = survivalProb(paramsB.sex, paramsB.currentAge, age)
+        // Probabilistic mode: integrate the survivor amount over the
+        // distribution of when the worker died, conditional on the survivor
+        // being alive at the current age. (The amount depends on the worker's
+        // death timing relative to their planned claim age.)
+        const startInt = Math.ceil(startAge)
+        const SA_arr = new Float64Array(maxAge + 2)
+        const SB_arr = new Float64Array(maxAge + 2)
+        const survFromA = new Float64Array(maxAge + 2)
+        const survFromB = new Float64Array(maxAge + 2)
+        for (let age = startInt; age <= maxAge + 1; age++) {
+          SA_arr[age] = survivalProb(paramsA.sex, paramsA.currentAge, age)
+          SB_arr[age] = survivalProb(paramsB.sex, paramsB.currentAge, age)
+          survFromA[age] = survivorAmountFromWorker(paramsA, claimAgeA, age)
+          survFromB[age] = survivorAmountFromWorker(paramsB, claimAgeB, age)
+        }
+        const fA = new Float64Array(maxAge + 2)
+        const fB = new Float64Array(maxAge + 2)
+        for (let d = startInt; d <= maxAge; d++) {
+          fA[d] = Math.max(0, SA_arr[d] - SA_arr[d + 1])
+          fB[d] = Math.max(0, SB_arr[d] - SB_arr[d + 1])
+        }
+
+        for (let age = startInt; age <= maxAge; age++) {
+          const SA = SA_arr[age]
+          const SB = SB_arr[age]
           const ageMonths = age * 12
           const aStarted = ageMonths >= tmA
           const bStarted = ageMonths >= tmB
           const bothFiled = aStarted && bStarted
 
-          const aPay = (aStarted ? monthlyA_own : 0) + (bothFiled ? topUpA : 0)
-          const bPay = (bStarted ? monthlyB_own : 0) + (bothFiled ? topUpB : 0)
-          const bothAliveIncome = (aPay + bPay) * 12
-          const onlyAIncome = (aStarted ? survivorIfBDies : 0) * 12
-          const onlyBIncome = (bStarted ? survivorIfADies : 0) * 12
+          const A_normal = (aStarted ? monthlyA_own : 0) + (bothFiled ? topUpA : 0)
+          const B_normal = (bStarted ? monthlyB_own : 0) + (bothFiled ? topUpB : 0)
 
-          const expectedIncome = SA * SB * bothAliveIncome
-                               + SA * (1 - SB) * onlyAIncome
-                               + (1 - SA) * SB * onlyBIncome
+          // Integrate over the dead spouse's death age d < current age.
+          let A_surv = 0
+          let B_surv = 0
+          for (let d = startInt; d < age; d++) {
+            if (aStarted && fB[d] > 0) {
+              A_surv += fB[d] * Math.max(monthlyA_own, survFromB[d])
+            }
+            if (bStarted && fA[d] > 0) {
+              B_surv += fA[d] * Math.max(monthlyB_own, survFromA[d])
+            }
+          }
+
+          const expectedIncome = (
+            SA * SB * (A_normal + B_normal)
+            + SA * A_surv
+            + SB * B_surv
+          ) * 12
 
           value = value * (1 + investRate) + expectedIncome
         }

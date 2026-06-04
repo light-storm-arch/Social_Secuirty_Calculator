@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react'
-import { getFRA, backOutPIA, benefitFactor, optimizeSingle, optimizeCouple, spousalTopUp, survivorBenefit } from '../engine/ssEngine.js'
+import { getFRA, backOutPIA, benefitFactor, optimizeSingle, optimizeCouple, spousalTopUp, survivorAmountFromWorker } from '../engine/ssEngine.js'
 import { lifeExpectancy, pDeathAtAge } from '../engine/mortalityTable.js'
 import SensitivityHeatmap from './SensitivityHeatmap.jsx'
 
@@ -63,8 +63,14 @@ function coupleLifetimeValue({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, d
   } else {
     topUpA = spousalTopUp(paramsB.pia, monthlyA_own, spousalStartAge, fraA)
   }
-  const survivorIfADies = survivorBenefit(monthlyB_own, monthlyA_own)
-  const survivorIfBDies = survivorBenefit(monthlyA_own, monthlyB_own)
+  const survivorIfADies = Math.max(
+    monthlyB_own,
+    survivorAmountFromWorker(paramsA, claimAgeA, deathA),
+  )
+  const survivorIfBDies = Math.max(
+    monthlyA_own,
+    survivorAmountFromWorker(paramsB, claimAgeB, deathB),
+  )
   const end = Math.max(deathA, deathB)
   let val = 0
   for (let age = Math.ceil(startAge); age <= end; age++) {
@@ -124,8 +130,14 @@ function coupleCumulative({ paramsA, paramsB, claimAgeA, claimAgeB, deathA, deat
   } else {
     topUpA = spousalTopUp(paramsB.pia, monthlyA_own, spousalStartAge, fraA)
   }
-  const survivorIfADies = survivorBenefit(monthlyB_own, monthlyA_own)
-  const survivorIfBDies = survivorBenefit(monthlyA_own, monthlyB_own)
+  const survivorIfADies = Math.max(
+    monthlyB_own,
+    survivorAmountFromWorker(paramsA, claimAgeA, deathA),
+  )
+  const survivorIfBDies = Math.max(
+    monthlyA_own,
+    survivorAmountFromWorker(paramsB, claimAgeB, deathB),
+  )
   const end = Math.max(deathA, deathB)
   const rows = []
   let balance = 0
