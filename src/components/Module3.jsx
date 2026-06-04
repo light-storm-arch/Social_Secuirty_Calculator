@@ -485,6 +485,43 @@ export default function Module3({ sharedState }) {
                 )}
               </div>
             </details>
+            <details style={{ marginTop: 8, fontSize: '0.8rem', color: '#3b5dad' }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+                How is the {mode === 'couple' ? 'household ' : ''}survival-weighted score calculated?
+              </summary>
+              <div style={{ marginTop: 6, lineHeight: 1.5 }}>
+                For each year from your current age to 119, the engine adds an
+                expected dollar amount equal to{' '}
+                {mode === 'couple' ? (
+                  <>
+                    <code>SA(x)·SB(x) · (both-alive pay) + SA(x) · Σ fB(d)·max(A own, survivor) + SB(x) · Σ fA(d)·max(B own, survivor)</code>,
+                    where <code>SA</code>/<code>SB</code> are SSA survival probabilities and{' '}
+                    <code>fA(d)</code>/<code>fB(d) = S(d) − S(d+1)</code> are the probabilities
+                    of dying during year <em>d</em>. The three terms cover both alive,
+                    A alone (B died at some past <em>d</em>), and B alone — each survivor
+                    pay reflects when the worker died (DRCs, RIB-LIM floor, survivor-side
+                    reduction at <code>max(60, d)</code>).
+                  </>
+                ) : (
+                  <>
+                    <code>S(x) · monthly</code> if you've filed by age <em>x</em>,
+                    where <code>S(x)</code> is the SSA probability of being alive at
+                    that exact age. So years you're more likely to be alive get a
+                    bigger weight than years deep into the tail.
+                  </>
+                )}{' '}
+                That annual amount is multiplied by 12 and added to a running balance
+                that compounds each year at your <em>Invest Benefits</em> rate
+                (0% if the toggle is off). The final balance after age 119 is the
+                {mode === 'couple' ? ' household ' : ' '}score shown above.
+                <div style={{ marginTop: 6 }}>
+                  <strong>What's not modeled:</strong> taxes, time-value beyond your
+                  invest rate, correlation between spouses' mortality, and the optimal
+                  survivor "switch" strategy (collect smaller benefit early, switch to
+                  larger at FRA/70).
+                </div>
+              </div>
+            </details>
           </div>
         )}
 
