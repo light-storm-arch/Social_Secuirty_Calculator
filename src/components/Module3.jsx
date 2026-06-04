@@ -393,10 +393,30 @@ export default function Module3({ sharedState }) {
           </div>
         ) : (
           <div style={{ marginTop: 14, padding: '12px 16px', background: '#eff6ff', borderRadius: 8, fontSize: '0.85rem', color: '#1d4ed8' }}>
-            Using SSA Period Life Table 2022 (2025 Trustees Report) for survival probabilities.{' '}
-            <a href="https://www.ssa.gov/oact/STATS/table4c6.html" target="_blank" rel="noreferrer" style={{ color: '#1d4ed8', fontWeight: 600 }}>
-              Source
-            </a>
+            <div>
+              Using SSA Period Life Table 2022 (2025 Trustees Report) for survival probabilities.{' '}
+              <a href="https://www.ssa.gov/oact/STATS/table4c6.html" target="_blank" rel="noreferrer" style={{ color: '#1d4ed8', fontWeight: 600 }}>
+                Source
+              </a>
+            </div>
+            <div style={{ marginTop: 8, display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+              <span>
+                {mode === 'couple' ? 'Person A' : 'Your'} life expectancy:{' '}
+                <strong>{lifeExpA.toFixed(1)}</strong>
+              </span>
+              {mode === 'couple' && lifeExpB != null && (
+                <span>
+                  Person B life expectancy: <strong>{lifeExpB.toFixed(1)}</strong>
+                </span>
+              )}
+            </div>
+            {mode === 'couple' && (
+              <div style={{ marginTop: 6, fontSize: '0.8rem', color: '#3b5dad' }}>
+                Couple optimization folds in spousal top-up (up to 50% of higher earner's PIA)
+                and survivor benefits (survivor receives the larger of own or deceased's benefit),
+                weighted by each year's joint survival probabilities.
+              </div>
+            )}
           </div>
         )}
 
