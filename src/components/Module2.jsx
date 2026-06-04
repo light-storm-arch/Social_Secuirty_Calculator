@@ -2,7 +2,7 @@ import React, { useState, useRef, useMemo, useEffect } from 'react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend, ResponsiveContainer
 } from 'recharts'
-import { getFRA, benefitFactor, backOutPIA, breakevenAnalysis } from '../engine/ssEngine.js'
+import { getFRA, benefitFactor, backOutPIA, breakevenAnalysis, coupleCumulativeByAge } from '../engine/ssEngine.js'
 import { downloadCsv } from '../utils/exportCsv.js'
 import { exportPdf } from '../utils/exportPdf.js'
 
@@ -18,10 +18,18 @@ function getPIA(person) {
   return backOutPIA(person.estimate, eAtAge, person.birthYear)
 }
 
-function makeDefaultStrategies(pia, fra) {
+function singleDefaults(pia, fra) {
   return [
     { label: 'Claim at 62', claimAge: { years: 62, months: 0 }, monthlyBenefit: pia * benefitFactor({ years: 62, months: 0 }, fra) },
     { label: 'Claim at 70', claimAge: { years: 70, months: 0 }, monthlyBenefit: pia * benefitFactor({ years: 70, months: 0 }, fra) },
+  ]
+}
+
+function coupleDefaults() {
+  return [
+    { label: 'Both at 62', claimAgeA: { years: 62, months: 0 }, claimAgeB: { years: 62, months: 0 } },
+    { label: 'Both at 70', claimAgeA: { years: 70, months: 0 }, claimAgeB: { years: 70, months: 0 } },
+    { label: 'A@70, B@62', claimAgeA: { years: 70, months: 0 }, claimAgeB: { years: 62, months: 0 } },
   ]
 }
 
@@ -34,93 +42,146 @@ export default function Module2({ sharedState }) {
 
   const [invest, setInvest] = useState(false)
   const [investRate, setInvestRate] = useState(0.02)
-  const [strategies, setStrategies] = useState(() => makeDefaultStrategies(piaA, fraA))
+  const [strategies, setStrategies] = useState(
+    () => mode === 'couple' ? coupleDefaults() : singleDefaults(piaA, fraA),
+  )
 
+  // Reset strategies when toggling single ↔ couple
   useEffect(() => {
-    const eAtAge = personA.estimateAtAgeMode === 'FRA'
-      ? getFRA(personA.birthYear)
-      : (personA.estimateAtAge ?? { years: 62, months: 0 })
-    const newPia = backOutPIA(personA.estimate, eAtAge, personA.birthYear)
-    const newFra = getFRA(personA.birthYear)
-    setStrategies(makeDefaultStrategies(newPia, newFra))
-  }, [personA.birthYear, personA.estimate, personA.estimateAtAgeYears, personA.estimateAtAgeMonths])
+    setStrategies(mode === 'couple' ? coupleDefaults() : singleDefaults(piaA, fraA))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode])
+
+  // Recompute single-mode monthly benefits when A's record changes
+  useEffect(() => {
+    if (mode === 'single') {
+      setStrategies(singleDefaults(piaA, fraA))
+    }
+  }, [piaA, fraA, mode])
 
   const chartRef = useRef(null)
-
-  // Recompute strategies when PIA or FRA changes
-  const effectivePia = mode === 'single' ? piaA : (piaA + (piaB || 0))
-  const effectiveFra = fraA
+  const rate = invest ? investRate : 0
+  const startAge = mode === 'couple'
+    ? Math.max(62, Math.ceil(personA.currentAge), Math.ceil(personB?.currentAge ?? 0))
+    : Math.max(62, Math.ceil(personA.currentAge))
+  const endAge = 100
 
   function addStrategy() {
-    const claimAge = { years: 67, months: 0 }
-    const monthly = piaA * benefitFactor(claimAge, fraA) + (mode === 'couple' ? (piaB || 0) * benefitFactor(claimAge, fraB || fraA) : 0)
-    setStrategies(prev => [...prev, {
-      label: `Claim at ${claimAge.years}`,
-      claimAge,
-      monthlyBenefit: monthly,
-    }])
+    if (mode === 'couple') {
+      setStrategies(prev => [...prev, {
+        label: `Strategy ${prev.length + 1}`,
+        claimAgeA: { years: 67, months: 0 },
+        claimAgeB: { years: 67, months: 0 },
+      }])
+    } else {
+      const claimAge = { years: 67, months: 0 }
+      setStrategies(prev => [...prev, {
+        label: `Claim at 67`,
+        claimAge,
+        monthlyBenefit: piaA * benefitFactor(claimAge, fraA),
+      }])
+    }
   }
 
   function removeStrategy(idx) {
     setStrategies(prev => prev.filter((_, i) => i !== idx))
   }
 
-  function updateStrategy(idx, field, rawVal) {
+  function updateStrategy(idx, patch) {
     setStrategies(prev => {
       const updated = [...prev]
-      const s = { ...updated[idx] }
-      if (field === 'label') {
-        s.label = rawVal
-      } else if (field === 'claimYears') {
-        const years = parseInt(rawVal) || 62
-        const claimAge = { years, months: s.claimAge.months }
-        const monthly = piaA * benefitFactor(claimAge, fraA) + (mode === 'couple' ? (piaB || 0) * benefitFactor(claimAge, fraB || fraA) : 0)
-        s.claimAge = claimAge
-        s.monthlyBenefit = monthly
-      } else if (field === 'claimMonths') {
-        const months = parseInt(rawVal) || 0
-        const claimAge = { years: s.claimAge.years, months }
-        const monthly = piaA * benefitFactor(claimAge, fraA) + (mode === 'couple' ? (piaB || 0) * benefitFactor(claimAge, fraB || fraA) : 0)
-        s.claimAge = claimAge
-        s.monthlyBenefit = monthly
+      const s = { ...updated[idx], ...patch }
+      if (mode === 'single' && (patch.claimAge != null)) {
+        s.monthlyBenefit = piaA * benefitFactor(s.claimAge, fraA)
       }
       updated[idx] = s
       return updated
     })
   }
 
-  const rate = invest ? investRate : 0
-  const startAge = Math.max(62, Math.ceil(personA.currentAge))
-  const endAge = 100
+  function updateClaim(idx, who, field, raw) {
+    const key = who === 'A' ? (mode === 'single' ? 'claimAge' : 'claimAgeA') : 'claimAgeB'
+    setStrategies(prev => {
+      const updated = [...prev]
+      const s = { ...updated[idx] }
+      const cur = s[key] ?? { years: 67, months: 0 }
+      const next = { ...cur }
+      if (field === 'years') next.years = Math.max(62, Math.min(70, parseInt(raw) || 62))
+      if (field === 'months') next.months = Math.max(0, Math.min(11, parseInt(raw) || 0))
+      s[key] = next
+      if (mode === 'single' && who === 'A') {
+        s.monthlyBenefit = piaA * benefitFactor(next, fraA)
+      }
+      updated[idx] = s
+      return updated
+    })
+  }
 
-  const analysis = useMemo(() => {
+  // Precompute per-strategy monthly amounts and cumulative rows.
+  const computed = useMemo(() => {
     if (strategies.length === 0) return null
-    return breakevenAnalysis(strategies, startAge, endAge, rate)
-  }, [strategies, startAge, endAge, rate])
+    if (mode === 'couple') {
+      const paramsA = { birthYear: personA.birthYear, pia: piaA }
+      const paramsB = { birthYear: personB.birthYear, pia: piaB }
+      const perStrat = strategies.map(s => coupleCumulativeByAge(
+        paramsA, paramsB, s.claimAgeA, s.claimAgeB, startAge, endAge, rate,
+      ))
+      const rows = []
+      const len = perStrat[0].rows.length
+      for (let i = 0; i < len; i++) {
+        rows.push({
+          age: perStrat[0].rows[i].age,
+          values: perStrat.map(p => p.rows[i].value),
+        })
+      }
+      const crossovers = []
+      for (let a = 0; a < strategies.length; a++) {
+        for (let b = a + 1; b < strategies.length; b++) {
+          let crossoverAge = null
+          for (let i = 1; i < rows.length; i++) {
+            const prev = rows[i - 1].values[b] - rows[i - 1].values[a]
+            const curr = rows[i].values[b] - rows[i].values[a]
+            if (prev < 0 && curr >= 0) { crossoverAge = rows[i].age; break }
+          }
+          crossovers.push({ stratA: a, stratB: b, age: crossoverAge })
+        }
+      }
+      return {
+        rows, crossovers,
+        monthly: perStrat.map(p => ({ a: p.monthlyA, b: p.monthlyB })),
+      }
+    }
+    const a = breakevenAnalysis(strategies, startAge, endAge, rate)
+    return {
+      ...a,
+      monthly: strategies.map(s => ({ a: s.monthlyBenefit })),
+    }
+  }, [strategies, startAge, endAge, rate, mode, personA, personB, piaA, piaB])
 
   const chartData = useMemo(() => {
-    if (!analysis) return []
-    return analysis.rows.map(r => {
+    if (!computed) return []
+    return computed.rows.map(r => {
       const obj = { age: r.age }
       strategies.forEach((s, i) => { obj[s.label] = Math.round(r.values[i]) })
       return obj
     })
-  }, [analysis, strategies])
+  }, [computed, strategies])
 
   function handleCsv() {
-    if (!analysis) return
+    if (!computed) return
     const headers = ['Age', ...strategies.map(s => s.label)]
-    const rows = analysis.rows.map(r => [r.age, ...r.values.map(v => Math.round(v))])
+    const rows = computed.rows.map(r => [r.age, ...r.values.map(v => Math.round(v))])
     downloadCsv('breakeven_analysis.csv', headers, rows)
   }
 
   async function handlePdf() {
-    if (!analysis) return
+    if (!computed) return
     const headers = ['Age', ...strategies.map(s => s.label)]
-    const rows = analysis.rows.map(r => [r.age, ...r.values.map(v => `$${Math.round(v).toLocaleString()}`)])
+    const rows = computed.rows.map(r => [r.age, ...r.values.map(v => `$${Math.round(v).toLocaleString()}`)])
     await exportPdf({
       title: 'Break-Even Analysis',
       inputs: {
+        'Mode': mode === 'couple' ? 'Couple' : 'Single',
         'Invest toggle': invest ? `On (r=${(investRate * 100).toFixed(1)}%)` : 'Off',
         'Start age': startAge,
       },
@@ -133,40 +194,58 @@ export default function Module2({ sharedState }) {
   return (
     <div>
       <div className="card">
-        <div className="card-title">Strategies</div>
+        <div className="card-title">
+          Strategies {mode === 'couple' && <span style={{ fontSize: '0.78rem', color: '#6b7a9a', fontWeight: 400 }}>— each strategy has separate claim ages for A and B</span>}
+        </div>
         {strategies.map((s, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap', paddingBottom: 8, borderBottom: i < strategies.length - 1 ? '1px solid #eef1f8' : 'none' }}>
             <div style={{ width: 14, height: 14, borderRadius: '50%', background: COLORS[i % COLORS.length], flexShrink: 0 }} />
             <input
               className="form-input"
               style={{ width: 160 }}
               value={s.label}
-              onChange={e => updateStrategy(i, 'label', e.target.value)}
+              onChange={e => updateStrategy(i, { label: e.target.value })}
               placeholder="Label"
             />
-            <span style={{ fontSize: '0.82rem', color: '#4b5a7a' }}>Claim Year:</span>
-            <input
-              type="number"
-              className="form-input"
-              style={{ width: 80 }}
-              min={62}
-              max={70}
-              value={s.claimAge.years}
-              onChange={e => updateStrategy(i, 'claimYears', e.target.value)}
-            />
-            <span style={{ fontSize: '0.82rem', color: '#4b5a7a' }}>Month:</span>
-            <input
-              type="number"
-              className="form-input"
-              style={{ width: 60 }}
-              min={0}
-              max={11}
-              value={s.claimAge.months}
-              onChange={e => updateStrategy(i, 'claimMonths', e.target.value)}
-            />
-            <span style={{ fontSize: '0.82rem', color: '#4b5a7a' }}>
-              ${Math.round(s.monthlyBenefit).toLocaleString()}/mo
-            </span>
+            {mode === 'couple' ? (
+              <>
+                <span style={{ fontSize: '0.82rem', color: '#4b5a7a', fontWeight: 600 }}>A:</span>
+                <input type="number" className="form-input" style={{ width: 60 }} min={62} max={70}
+                  value={s.claimAgeA.years}
+                  onChange={e => updateClaim(i, 'A', 'years', e.target.value)} />
+                <span style={{ fontSize: '0.78rem', color: '#6b7a9a' }}>y</span>
+                <input type="number" className="form-input" style={{ width: 50 }} min={0} max={11}
+                  value={s.claimAgeA.months}
+                  onChange={e => updateClaim(i, 'A', 'months', e.target.value)} />
+                <span style={{ fontSize: '0.78rem', color: '#6b7a9a' }}>m</span>
+                <span style={{ fontSize: '0.82rem', color: '#4b5a7a', fontWeight: 600, marginLeft: 8 }}>B:</span>
+                <input type="number" className="form-input" style={{ width: 60 }} min={62} max={70}
+                  value={s.claimAgeB.years}
+                  onChange={e => updateClaim(i, 'B', 'years', e.target.value)} />
+                <span style={{ fontSize: '0.78rem', color: '#6b7a9a' }}>y</span>
+                <input type="number" className="form-input" style={{ width: 50 }} min={0} max={11}
+                  value={s.claimAgeB.months}
+                  onChange={e => updateClaim(i, 'B', 'months', e.target.value)} />
+                <span style={{ fontSize: '0.78rem', color: '#6b7a9a' }}>m</span>
+                <span style={{ fontSize: '0.82rem', color: '#4b5a7a', marginLeft: 8 }}>
+                  A: ${Math.round(computed?.monthly?.[i]?.a ?? 0).toLocaleString()}/mo, B: ${Math.round(computed?.monthly?.[i]?.b ?? 0).toLocaleString()}/mo
+                </span>
+              </>
+            ) : (
+              <>
+                <span style={{ fontSize: '0.82rem', color: '#4b5a7a' }}>Claim Year:</span>
+                <input type="number" className="form-input" style={{ width: 80 }} min={62} max={70}
+                  value={s.claimAge.years}
+                  onChange={e => updateClaim(i, 'A', 'years', e.target.value)} />
+                <span style={{ fontSize: '0.82rem', color: '#4b5a7a' }}>Month:</span>
+                <input type="number" className="form-input" style={{ width: 60 }} min={0} max={11}
+                  value={s.claimAge.months}
+                  onChange={e => updateClaim(i, 'A', 'months', e.target.value)} />
+                <span style={{ fontSize: '0.82rem', color: '#4b5a7a' }}>
+                  ${Math.round(s.monthlyBenefit).toLocaleString()}/mo
+                </span>
+              </>
+            )}
             {strategies.length > 2 && (
               <button className="btn btn-danger btn-sm" onClick={() => removeStrategy(i)}>Remove</button>
             )}
@@ -201,16 +280,18 @@ export default function Module2({ sharedState }) {
           )}
         </div>
         <p style={{ fontSize: '0.78rem', color: '#6b7a9a', fontStyle: 'italic' }}>
-          Taxes on benefits and investment gains are out of scope. Real rate <em>r</em> assumes 100% of benefits are invested with no withdrawals.
+          {mode === 'couple'
+            ? 'Couple breakeven assumes both spouses live through the analysis window and includes spousal top-up (gated on both having filed). Survivor scenarios are modeled in the Optimizer tab.'
+            : 'Taxes on benefits and investment gains are out of scope. Real rate r assumes 100% of benefits are invested with no withdrawals.'}
         </p>
       </div>
 
       <div className="card">
         <div className="card-title">Cumulative Benefits Over Time</div>
-        {analysis && (
+        {computed && (
           <>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-              {analysis.crossovers.map((c, i) => (
+              {computed.crossovers.map((c, i) => (
                 c.age !== null && (
                   <span key={i} className="crossover-badge">
                     {strategies[c.stratA].label} vs {strategies[c.stratB].label}: break-even age {c.age}
@@ -236,7 +317,7 @@ export default function Module2({ sharedState }) {
                       dot={false}
                     />
                   ))}
-                  {analysis.crossovers.map((c, i) =>
+                  {computed.crossovers.map((c, i) =>
                     c.age !== null ? (
                       <ReferenceLine
                         key={i}
@@ -263,7 +344,7 @@ export default function Module2({ sharedState }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {analysis.rows.map((r, i) => (
+                  {computed.rows.map((r, i) => (
                     <tr key={i}>
                       <td>{r.age}</td>
                       {r.values.map((v, j) => <td key={j}>${Math.round(v).toLocaleString()}</td>)}

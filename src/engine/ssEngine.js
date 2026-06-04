@@ -153,6 +153,53 @@ export function cumulativeByAge(monthlyBenefit, claimAge, startAge, endAge, inve
   return rows
 }
 
+// Per-year cumulative for a couple, both alive through endAge. Includes
+// spousal top-up gated on both having filed; no survivor logic (this is the
+// "both live to N" deterministic projection used by the breakeven view).
+export function coupleCumulativeByAge(paramsA, paramsB, claimAgeA, claimAgeB, startAge, endAge, investRate) {
+  const fraA = getFRA(paramsA.birthYear)
+  const fraB = getFRA(paramsB.birthYear)
+  const higherEarnerIsA = paramsA.pia >= paramsB.pia
+  const monthlyA_own = paramsA.pia * benefitFactor(claimAgeA, fraA)
+  const monthlyB_own = paramsB.pia * benefitFactor(claimAgeB, fraB)
+  const tmA = claimAgeA.years * 12 + claimAgeA.months
+  const tmB = claimAgeB.years * 12 + claimAgeB.months
+  const spousalStartMonths = Math.max(tmA, tmB)
+  const spousalStartAge = {
+    years: Math.floor(spousalStartMonths / 12),
+    months: spousalStartMonths % 12,
+  }
+  let topUpA = 0
+  let topUpB = 0
+  if (higherEarnerIsA) {
+    topUpB = spousalTopUp(paramsA.pia, monthlyB_own, spousalStartAge, fraB)
+  } else {
+    topUpA = spousalTopUp(paramsB.pia, monthlyA_own, spousalStartAge, fraA)
+  }
+  const rows = []
+  let balance = 0
+  for (let age = Math.ceil(startAge); age <= endAge; age++) {
+    const ageMonths = age * 12
+    const aStarted = ageMonths >= tmA
+    const bStarted = ageMonths >= tmB
+    const bothFiled = aStarted && bStarted
+    const aPay = (aStarted ? monthlyA_own : 0) + (bothFiled ? topUpA : 0)
+    const bPay = (bStarted ? monthlyB_own : 0) + (bothFiled ? topUpB : 0)
+    const income = (aPay + bPay) * 12
+    if (investRate > 0) {
+      balance = balance * (1 + investRate) + income
+    } else {
+      balance += income
+    }
+    rows.push({ age, value: balance })
+  }
+  return {
+    monthlyA: monthlyA_own + topUpA,
+    monthlyB: monthlyB_own + topUpB,
+    rows,
+  }
+}
+
 export function breakevenAnalysis(strategies, startAge, endAge, investRate) {
   const cumulatives = strategies.map(s =>
     cumulativeByAge(s.monthlyBenefit, s.claimAge, startAge, endAge, investRate)
